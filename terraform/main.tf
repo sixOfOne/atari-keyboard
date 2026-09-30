@@ -50,7 +50,9 @@ data "aws_ami" "amazon_linux" {
 resource "aws_security_group" "stella" {
   count       = var.enable_aws ? 1 : 0
   name        = "${var.name_prefix}-stella"
-  description = "SSH from ssh_ingress_cidr. VNC is localhost-only via an SSH tunnel."
+  # AWS SG description is immutable; changing it forces replace while the
+  # instance still holds the SG and wedges apply. Keep the original string.
+  description = "SSH (and optional VNC) for remote Stella host"
 
   # TCP 5900/5901 are intentionally absent. TigerVNC listens on 127.0.0.1:5901.
   # Reach it with: ssh -L 5901:127.0.0.1:5901 ec2-user@HOST

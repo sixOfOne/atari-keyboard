@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (gitignored) when you are ready for AWS.
+enable_aws       = true
+aws_region       = "us-east-2"
+key_name         = "neo-atari"
+ssh_ingress_cidr = "203.0.113.10/32" # replace with your public IP /32
+enable_vnc       = true
+instance_type    = "t3.small"

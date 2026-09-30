@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Metacity Stella
+Comment=Minimal metacity + xterm session for remote Stella
+Exec=/usr/local/bin/stella-vnc-session
+TryExec=/usr/local/bin/stella-vnc-session
+Type=Application
+DesktopNames=Metacity

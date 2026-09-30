@@ -1,7 +1,6 @@
-# ROM paths are local-only and must not be committed.
-# Add legally obtained ROM paths when running locally, for example:
-# games:
-#   - name: Example Game
-#     rom: roms/example.bin
+# ROM paths are local-only and must not be committed (see .gitignore for roms/).
+# `play` uses the first entry when no ROM argument is given.
 
-games: []
+games:
+  - name: Pac-Man
+    rom: roms/Pac-Man (NA).a26

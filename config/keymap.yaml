@@ -1,17 +1,27 @@
-# Host keyboard -> Atari joystick intent.
-# Stella's keyboard labels and per-game bindings may differ; adjust in Stella as needed.
+# Host keyboard -> Atari left joystick (applied to Stella).
+#
+# Stella persists remaps in:
+#   ~/Library/Application Support/Stella/stella.sqlite3  (setting: keymap_joy)
+# A full snapshot of that map lives in config/stella_keymap_joy.json.
+# Re-apply with: python3 scripts/apply_stella_keymap.py
+#
+# Defaults already present in Stella (kept):
+#   arrows / keypad  -> direction
+#   space / left ctrl / kp_5 -> fire
+#
+# Added for this project:
 keyboard:
   w: up
-  arrowup: up
-  s: down
-  arrowdown: down
   a: left
-  arrowleft: left
+  s: down
   d: right
+  arrowup: up
+  arrowdown: down
+  arrowleft: left
   arrowright: right
   space: fire
-  ctrl: fire
+  lctrl: fire
 
 notes:
-  - This is an intent map for the kickoff CLI, not a direct Stella controller file.
-  - Verify and adjust the final mapping in Stella for the selected game and host.
+  - Quit Stella before applying keymap changes (sqlite is live while the app runs).
+  - After apply, relaunch Pac-Man and confirm WASD + arrows + space/ctrl.

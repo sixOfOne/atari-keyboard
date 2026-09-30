@@ -1,25 +1,345 @@
 ---
-# Stub only: choose the correct package name for the target OS before enabling.
-- name: Placeholder for installing Stella
-  ansible.builtin.debug:
-    msg: "Would install the Stella package on the local host"
+# --- macOS (local smoke path) ---
+- name: Ensure Stella.app is present (macOS)
+  ansible.builtin.stat:
+    path: "{{ stella_app }}"
+  register: stella_app_stat
+  when: ansible_os_family == "Darwin"
   tags: [stella, install]
 
-# Example future task (intentionally disabled until the target platform is chosen):
-# - name: Install Stella package
-#   ansible.builtin.package:
-#     name: stella
-#     state: present
-#   become: true
+- name: Fail clearly when Stella.app is missing
+  ansible.builtin.fail:
+    msg: >-
+      Stella.app not found at {{ stella_app }}.
+      Install Stella for macOS, then re-run configure.
+  when:
+    - ansible_os_family == "Darwin"
+    - not stella_app_stat.stat.exists
+  tags: [stella, install]
 
-- name: Placeholder for copying the keyboard map
-  ansible.builtin.debug:
-    msg: "Would copy config/keymap.yaml to the configured Stella host"
+- name: Ensure ~/.local/bin exists (macOS)
+  ansible.builtin.file:
+    path: "{{ local_bin }}"
+    state: directory
+    mode: "0755"
+  when: ansible_os_family == "Darwin"
+  tags: [stella, install]
+
+- name: Symlink stella onto PATH via ~/.local/bin (macOS)
+  ansible.builtin.file:
+    src: "{{ stella_bin }}"
+    dest: "{{ local_bin }}/stella"
+    state: link
+    force: true
+  when:
+    - ansible_os_family == "Darwin"
+    - stella_app_stat.stat.exists | default(false)
+  tags: [stella, install]
+
+- name: Ensure atari-kickoff config directory exists (macOS)
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.config/atari-kickoff"
+    state: directory
+    mode: "0755"
+  when: ansible_os_family == "Darwin"
   tags: [stella, keymap]
 
-# Example future task:
-# - name: Copy keymap configuration
-#   ansible.builtin.copy:
-#     src: "{{ playbook_dir }}/../config/keymap.yaml"
-#     dest: "{{ ansible_env.HOME }}/.config/atari-kickoff/keymap.yaml"
-#     mode: "0644"
+- name: Copy project keymap intent file (macOS)
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/config/keymap.yaml"
+    dest: "{{ ansible_env.HOME }}/.config/atari-kickoff/keymap.yaml"
+    mode: "0644"
+  when: ansible_os_family == "Darwin"
+  tags: [stella, keymap]
+
+- name: Ensure Stella settings directory exists (macOS)
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/Library/Application Support/Stella"
+    state: directory
+    mode: "0755"
+  when: ansible_os_family == "Darwin"
+  tags: [stella, keymap]
+
+- name: Apply Stella joystick keymap from repo snapshot (macOS)
+  ansible.builtin.command:
+    cmd: python3 "{{ repo_root }}/scripts/apply_stella_keymap.py"
+  register: keymap_apply
+  changed_when: "'PASS: wrote keymap_joy' in keymap_apply.stdout"
+  when: ansible_os_family == "Darwin"
+  tags: [stella, keymap]
+
+- name: Show keymap apply result (macOS)
+  ansible.builtin.debug:
+    var: keymap_apply.stdout_lines
+  when:
+    - ansible_os_family == "Darwin"
+    - keymap_apply is defined
+  tags: [stella, keymap]
+
+# --- Amazon Linux / remote EC2 ---
+- name: Install Stella dependencies (Amazon Linux)
+  ansible.builtin.dnf:
+    name:
+      - tar
+      - gzip
+      - which
+      - libX11
+      - libXext
+      - libXrandr
+      - libXcursor
+      - mesa-libGL
+      - alsa-lib
+      - python3
+    state: present
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, install]
+
+- name: Check whether stella is already on PATH (Linux)
+  ansible.builtin.command: which stella
+  register: stella_which
+  changed_when: false
+  failed_when: false
+  when: ansible_os_family == "RedHat"
+  tags: [stella, install]
+
+- name: Install Stella via package manager when available (Linux)
+  ansible.builtin.dnf:
+    name: stella
+    state: present
+  become: true
+  register: stella_pkg
+  failed_when: false
+  when:
+    - ansible_os_family == "RedHat"
+    - stella_which.rc != 0
+  tags: [stella, install]
+
+- name: Report Stella package install status (Linux)
+  ansible.builtin.debug:
+    msg: >-
+      Stella package result: {{ stella_pkg.msg | default(stella_pkg.rc | default('ok')) }}.
+      Falling back to Flatpak because Stella is not on PATH.
+  when:
+    - ansible_os_family == "RedHat"
+    - stella_pkg is defined
+  tags: [stella, install]
+
+- name: Install Flatpak (Linux fallback)
+  ansible.builtin.dnf:
+    name: flatpak
+    state: present
+  become: true
+  when:
+    - ansible_os_family == "RedHat"
+    - stella_which.rc != 0
+  tags: [stella, install]
+
+- name: Add Flathub remote when missing (Linux fallback)
+  ansible.builtin.command:
+    cmd: flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+  become: true
+  changed_when: false
+  when:
+    - ansible_os_family == "RedHat"
+    - stella_which.rc != 0
+  tags: [stella, install]
+
+- name: Install Stella from Flathub (Linux fallback)
+  ansible.builtin.command:
+    cmd: flatpak install -y flathub io.github.stella_emu.Stella
+  become: true
+  when:
+    - ansible_os_family == "RedHat"
+    - stella_which.rc != 0
+  tags: [stella, install]
+
+- name: Verify Stella Flatpak is installed (Linux fallback)
+  ansible.builtin.command:
+    cmd: flatpak list --app --columns=application,name
+  register: stella_flatpak_list
+  changed_when: false
+  when:
+    - ansible_os_family == "RedHat"
+    - stella_which.rc != 0
+  tags: [stella, install]
+
+- name: Show Stella Flatpak installation (Linux fallback)
+  ansible.builtin.debug:
+    var: stella_flatpak_list.stdout_lines
+  when:
+    - ansible_os_family == "RedHat"
+    - stella_flatpak_list is defined
+  tags: [stella, install]
+
+- name: Ensure remote config directory exists (Linux)
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.config/atari-kickoff"
+    state: directory
+    mode: "0755"
+  when: ansible_os_family == "RedHat"
+  tags: [stella, keymap]
+
+- name: Copy keymap intent file to remote host (Linux)
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/config/keymap.yaml"
+    dest: "{{ ansible_env.HOME }}/.config/atari-kickoff/keymap.yaml"
+    mode: "0644"
+  when: ansible_os_family == "RedHat"
+  tags: [stella, keymap]
+
+- name: Copy Stella keymap snapshot to remote host (Linux)
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/config/stella_keymap_joy.json"
+    dest: "{{ ansible_env.HOME }}/.config/atari-kickoff/stella_keymap_joy.json"
+    mode: "0644"
+  when: ansible_os_family == "RedHat"
+  tags: [stella, keymap]
+
+# --- Linux VNC / remote desktop (TigerVNC + metacity) ---
+- name: Install minimal desktop stack for VNC (Linux)
+  ansible.builtin.dnf:
+    name:
+      - tigervnc-server
+      - dbus-x11
+      - xterm
+      - dejavu-sans-fonts
+      - xorg-x11-xauth
+      - xorg-x11-server-utils
+      - metacity
+    state: present
+    install_weak_deps: false
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Install Stella VNC session launcher
+  ansible.builtin.copy:
+    src: stella-vnc-session.sh
+    dest: /usr/local/bin/stella-vnc-session
+    mode: "0755"
+    owner: root
+    group: root
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Install Stella VNC xsession desktop entry
+  ansible.builtin.copy:
+    src: metacity-stella.desktop
+    dest: "/usr/share/xsessions/{{ vnc_session_name }}.desktop"
+    mode: "0644"
+    owner: root
+    group: root
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Ensure /etc/tigervnc exists
+  ansible.builtin.file:
+    path: /etc/tigervnc
+    state: directory
+    mode: "0755"
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Map VNC display to ec2-user
+  ansible.builtin.copy:
+    dest: /etc/tigervnc/vncserver.users
+    mode: "0644"
+    content: |
+      # Managed by atari-keyboard ansible stella role
+      {{ vnc_display }}={{ ansible_user_id }}
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Set TigerVNC defaults (listen on LAN; SG restricts source IP)
+  ansible.builtin.copy:
+    dest: /etc/tigervnc/vncserver-config-defaults
+    mode: "0644"
+    content: |
+      # Managed by atari-keyboard ansible stella role
+      session={{ vnc_session_name }}
+      geometry={{ vnc_geometry }}
+      securitytypes=vncauth
+      alwaysshared
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Require password file on Ansible controller
+  ansible.builtin.stat:
+    path: "{{ vnc_password_file }}"
+  register: vnc_pw_stat
+  delegate_to: localhost
+  connection: local
+  become: false
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Fail when VNC password file is missing on controller
+  ansible.builtin.fail:
+    msg: >-
+      VNC password file missing at {{ vnc_password_file }}.
+      Create it (mode 600) with an 8-char password, outside git, e.g.
+      mkdir -p ~/.config/atari-kickoff &&
+      openssl rand -base64 6 | tr -d '/+=' | head -c 8 >
+      ~/.config/atari-kickoff/vnc-password.txt &&
+      chmod 600 ~/.config/atari-kickoff/vnc-password.txt
+  when:
+    - ansible_os_family == "RedHat"
+    - not (vnc_pw_stat.stat.exists | default(false))
+  tags: [stella, vnc]
+
+- name: Ensure remote ~/.vnc directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.vnc"
+    state: directory
+    mode: "0700"
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Encode VNC password on remote from controller secret
+  ansible.builtin.shell: |
+    set -euo pipefail
+    printf '%s\n' "$VNC_PASS" | vncpasswd -f > "$HOME/.vnc/passwd"
+    chmod 600 "$HOME/.vnc/passwd"
+  environment:
+    VNC_PASS: "{{ lookup('file', vnc_password_file) | trim }}"
+  no_log: true
+  changed_when: true
+  when:
+    - ansible_os_family == "RedHat"
+    - vnc_pw_stat.stat.exists | default(false)
+  tags: [stella, vnc]
+
+- name: Restore SELinux context on ~/.vnc when enforcing
+  ansible.builtin.command:
+    cmd: restorecon -RFv {{ ansible_env.HOME }}/.vnc
+  register: vnc_restorecon
+  changed_when: "'Relabeled' in (vnc_restorecon.stdout | default(''))"
+  failed_when: false
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Enable and start TigerVNC on display {{ vnc_display }}
+  ansible.builtin.systemd:
+    name: "vncserver@{{ vnc_display }}.service"
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Report VNC endpoint
+  ansible.builtin.debug:
+    msg: >-
+      VNC listening on {{ ansible_host | default(inventory_hostname) }}:{{ vnc_port }}
+      (display {{ vnc_display }}). Password file on controller:
+      {{ vnc_password_file }}. Launch Stella inside the session with:
+      flatpak run io.github.stella_emu.Stella
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]

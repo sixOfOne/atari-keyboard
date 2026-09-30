@@ -1,0 +1,184 @@
+[
+  {
+    "event": "RightJoystickFire",
+    "key": "f"
+  },
+  {
+    "event": "QTJoystickFourFire",
+    "key": "f",
+    "mod": "shift"
+  },
+  {
+    "event": "RightJoystickLeft",
+    "key": "g"
+  },
+  {
+    "event": "QTJoystickFourLeft",
+    "key": "g",
+    "mod": "shift"
+  },
+  {
+    "event": "RightJoystickDown",
+    "key": "h"
+  },
+  {
+    "event": "QTJoystickFourDown",
+    "key": "h",
+    "mod": "shift"
+  },
+  {
+    "event": "RightJoystickRight",
+    "key": "j"
+  },
+  {
+    "event": "QTJoystickFourRight",
+    "key": "j",
+    "mod": "shift"
+  },
+  {
+    "event": "RightJoystickUp",
+    "key": "y"
+  },
+  {
+    "event": "QTJoystickFourUp",
+    "key": "y",
+    "mod": "shift"
+  },
+  {
+    "event": "LeftJoystickFire5",
+    "key": "4"
+  },
+  {
+    "event": "LeftJoystickFire9",
+    "key": "5"
+  },
+  {
+    "event": "RightJoystickFire5",
+    "key": "6"
+  },
+  {
+    "event": "RightJoystickFire9",
+    "key": "7"
+  },
+  {
+    "event": "LeftJoystickFire",
+    "key": "space"
+  },
+  {
+    "event": "QTJoystickThreeFire",
+    "key": "space",
+    "mod": "shift"
+  },
+  {
+    "event": "LeftJoystickRight",
+    "key": "right"
+  },
+  {
+    "event": "QTJoystickThreeRight",
+    "key": "right",
+    "mod": "shift"
+  },
+  {
+    "event": "LeftJoystickLeft",
+    "key": "left"
+  },
+  {
+    "event": "QTJoystickThreeLeft",
+    "key": "left",
+    "mod": "shift"
+  },
+  {
+    "event": "LeftJoystickDown",
+    "key": "down"
+  },
+  {
+    "event": "QTJoystickThreeDown",
+    "key": "down",
+    "mod": "shift"
+  },
+  {
+    "event": "LeftJoystickUp",
+    "key": "up"
+  },
+  {
+    "event": "QTJoystickThreeUp",
+    "key": "up",
+    "mod": "shift"
+  },
+  {
+    "event": "LeftJoystickDown",
+    "key": "kp_2"
+  },
+  {
+    "event": "QTJoystickThreeDown",
+    "key": "kp_2",
+    "mod": "shift"
+  },
+  {
+    "event": "LeftJoystickFire9",
+    "key": "kp_3"
+  },
+  {
+    "event": "LeftJoystickLeft",
+    "key": "kp_4"
+  },
+  {
+    "event": "QTJoystickThreeLeft",
+    "key": "kp_4",
+    "mod": "shift"
+  },
+  {
+    "event": "LeftJoystickFire",
+    "key": "kp_5"
+  },
+  {
+    "event": "LeftJoystickRight",
+    "key": "kp_6"
+  },
+  {
+    "event": "QTJoystickThreeRight",
+    "key": "kp_6",
+    "mod": "shift"
+  },
+  {
+    "event": "LeftJoystickUp",
+    "key": "kp_8"
+  },
+  {
+    "event": "QTJoystickThreeUp",
+    "key": "kp_8",
+    "mod": "shift"
+  },
+  {
+    "event": "LeftJoystickFire5",
+    "key": "kp_9"
+  },
+  {
+    "event": "LeftJoystickFire",
+    "key": "lctrl"
+  },
+  {
+    "event": "LeftJoystickFire9",
+    "key": "rctrl"
+  },
+  {
+    "event": "LeftJoystickFire5",
+    "key": "rshift"
+  },
+  {
+    "event": "LeftJoystickUp",
+    "key": "w"
+  },
+  {
+    "event": "LeftJoystickLeft",
+    "key": "a"
+  },
+  {
+    "event": "LeftJoystickDown",
+    "key": "s"
+  },
+  {
+    "event": "LeftJoystickRight",
+    "key": "d"
+  }
+]

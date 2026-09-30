@@ -1,9 +1,15 @@
 ---
-# Localhost stub for the future Stella configuration path.
-# Run with: ansible-playbook -i inventory/localhost.yml playbook.yml
-- name: Prepare local Atari smoke path
-  hosts: localhost
-  connection: local
-  gather_facts: false
+# Local:  ansible-playbook -i inventory/localhost.yml playbook.yml
+# AWS:    python3 scripts/render_aws_inventory.py &&
+#         ansible-playbook -i inventory/aws.yml playbook.yml
+# Or:     PYTHONPATH=src python3 -m atari_kickoff configure [--target aws|local]
+- name: Configure Stella for keyboard Atari
+  hosts: all
+  gather_facts: true
+  vars:
+    repo_root: "{{ playbook_dir | dirname }}"
+    stella_app: /Applications/Stella.app
+    stella_bin: /Applications/Stella.app/Contents/MacOS/stella
+    local_bin: "{{ ansible_env.HOME }}/.local/bin"
   roles:
     - role: stella

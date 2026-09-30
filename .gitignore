@@ -10,12 +10,23 @@ env/
 
 # Terraform
 .terraform/
+.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
-.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+terraform.tfvars
+*.auto.tfvars
 
 # Ansible
 *.retry
+
+# Generated AWS inventory (public IP + local PEM path). Keep aws.yml.j2 tracked.
+ansible/inventory/aws.yml
 
 # Atari ROMs (keep only the directory marker)
 roms/*

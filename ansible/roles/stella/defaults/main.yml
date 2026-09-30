@@ -1,0 +1,7 @@
+# VNC / remote desktop (Amazon Linux / EC2)
+vnc_display: ":1"
+vnc_port: 5901
+vnc_geometry: "1280x720"
+vnc_session_name: metacity-stella
+# Password lives only on the Ansible controller (Mac), never in the repo.
+vnc_password_file: "{{ lookup('env', 'HOME') }}/.config/atari-kickoff/vnc-password.txt"

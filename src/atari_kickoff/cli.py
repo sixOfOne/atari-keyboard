@@ -256,8 +256,11 @@ def build_remote_stella_cmd(remote_rom: str, *, foreground: bool) -> str:
     env = (
         f"export DISPLAY={shlex.quote(VNC_DISPLAY)}; "
         f"export XAUTHORITY=$HOME/.Xauthority; "
+        "export SDL_AUDIODRIVER=dummy; "
+        "export SDL_VIDEODRIVER=x11; "
+        "export LIBGL_ALWAYS_SOFTWARE=1; "
     )
-    run = f"flatpak run {FLATPAK_STELLA} {rom_q}"
+    run = f"flatpak run {FLATPAK_STELLA} -video software -audio.enabled 0 {rom_q}"
     if foreground:
         return env + run
     # Detach so the local CLI returns immediately.

@@ -7,7 +7,7 @@ Keyboard-controlled Atari 2600 play via [Stella](https://stella-emu.github.io/),
 - **Local (macOS):** Stella app + PATH symlink, WASD/arrows/fire keymap, Pac-Man ROM (gitignored), smoke test, `play` / `configure` / `apply` CLI.
 - **AWS (us-east-2):** EC2 `t3.small`, 8 GB gp3 root, SSH locked to your IP, Ansible inventory from Terraform outputs, Flatpak Stella (`io.github.stella_emu.Stella`).
 - **AWS VNC:** TigerVNC on display `:1` (TCP **5901**), minimal metacity + xterm session; password only in `~/.config/atari-kickoff/vnc-password.txt` (mode 600, never committed).
-- **Remote play:** `play --target aws` syncs a ROM over SCP to `~/roms/` on EC2 and launches Flatpak Stella on `DISPLAY=:1` (non-blocking by default).
+- **Remote play:** `play --target aws` syncs a ROM over SCP to `~/roms/` on EC2 and launches Flatpak Stella on `DISPLAY=:1` (non-blocking by default), using software video, dummy audio, and X11/GL software-rendering settings for VNC.
 
 ## Layout
 
@@ -100,7 +100,7 @@ SSH identity defaults to `~/.ssh/neo-atari.pem` (`--ssh-key` to override). Host 
 Or launch manually inside the VNC xterm:
 
 ```bash
-flatpak run io.github.stella_emu.Stella ~/roms/"Pac-Man (NA).a26"
+flatpak run io.github.stella_emu.Stella -video software -audio.enabled 0 ~/roms/"Pac-Man (NA).a26"
 ```
 
 5. Quick port check from the Mac:

@@ -25,6 +25,18 @@ SSH_KEY_DEFAULT = Path.home() / ".ssh" / "neo-atari.pem"
 REMOTE_ROM_DIR = "~/roms"  # expands on the remote host to /home/ec2-user/roms
 FLATPAK_STELLA = "io.github.stella_emu.Stella"
 VNC_DISPLAY = ":1"
+# TigerVNC on Amazon Linux: Stella's default OpenGL renderer and SDL audio
+# device abort the process (std::out_of_range after SDL audio warnings).
+# Software video and the dummy audio driver keep the window up.
+# Flatpak does not inherit arbitrary host variables, so play injects these
+# with `flatpak run --env` as well as exporting them for the SSH shell.
+# Keep in sync with ansible/roles/stella/files/stella-flatpak.
+REMOTE_SDL_ENV = (
+    ("SDL_AUDIODRIVER", "dummy"),
+    ("SDL_VIDEODRIVER", "x11"),
+    ("LIBGL_ALWAYS_SOFTWARE", "1"),
+)
+REMOTE_STELLA_ARGS = ("-video", "software", "-audio.enabled", "0")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -249,20 +261,28 @@ def build_remote_mkdir_cmd() -> str:
 
 
 def build_remote_stella_cmd(remote_rom: str, *, foreground: bool) -> str:
-    """Shell snippet run on the EC2 host to launch Flatpak Stella on the VNC display."""
-    # Quote the ROM path for remote sh; Flatpak needs the real file path.
+    """Shell snippet run on the EC2 host to launch Flatpak Stella on the VNC display.
+
+    Uses software video and disabled audio so Stella stays up under TigerVNC.
+    SDL_* is exported in the SSH shell and passed into the sandbox with --env.
+    """
     rom_q = shlex.quote(remote_rom)
-    # Prefer XAUTHORITY so a non-VNC SSH session can talk to :1.
-    env = (
-        f"export DISPLAY={shlex.quote(VNC_DISPLAY)}; "
-        f"export XAUTHORITY=$HOME/.Xauthority; "
-    )
-    run = f"flatpak run {FLATPAK_STELLA} {rom_q}"
+    exports = [
+        f"export DISPLAY={shlex.quote(VNC_DISPLAY)}",
+        "export XAUTHORITY=$HOME/.Xauthority",
+    ]
+    env_flags: list[str] = []
+    for key, value in REMOTE_SDL_ENV:
+        exports.append(f"export {key}={shlex.quote(value)}")
+        env_flags.append(shlex.quote(f"--env={key}={value}"))
+    stella_args = " ".join(shlex.quote(arg) for arg in REMOTE_STELLA_ARGS)
+    run = f"flatpak run {' '.join(env_flags)} {FLATPAK_STELLA} {stella_args} {rom_q}"
+    prefix = "; ".join(exports) + "; "
     if foreground:
-        return env + run
+        return prefix + run
     # Detach so the local CLI returns immediately.
     return (
-        env
+        prefix
         + f"nohup {run} >/tmp/atari-kickoff-stella.log 2>&1 </dev/null & "
         + "echo $!; sleep 0.3"
     )
@@ -295,6 +315,10 @@ def cmd_play_aws(
     print(f"ROM (local): {rom}")
     print(f"ROM (remote): {remote_rom}")
     print(f"Keymap: {REPO_ROOT / 'config' / 'keymap.yaml'}")
+    print(
+        "Launch profile: software video, audio disabled, "
+        "SDL dummy driver on X11 (TigerVNC)"
+    )
     print(f"VNC display: {VNC_DISPLAY} (connect vnc://{host}:5901)")
     print("1) Ensure remote ROM dir:", _fmt_cmd(ssh_mkdir))
     print("2) Sync ROM:", _fmt_cmd(scp_cmd))

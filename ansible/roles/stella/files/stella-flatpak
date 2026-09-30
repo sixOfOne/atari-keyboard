@@ -1,0 +1,27 @@
+#!/bin/bash
+# Launch Flatpak Stella on the TigerVNC display.
+#
+# OpenGL and the default SDL audio driver abort Stella on Amazon Linux
+# (std::out_of_range after SDL audio warnings). Software video and the dummy
+# audio driver keep the game window up.
+#
+# Flatpak does not pass arbitrary host environment variables into the sandbox,
+# so SDL_* and LIBGL_ALWAYS_SOFTWARE are injected with flatpak run --env.
+# Keep these flags aligned with REMOTE_SDL_ENV / REMOTE_STELLA_ARGS in
+# src/atari_kickoff/cli.py.
+set -euo pipefail
+
+export DISPLAY="${DISPLAY:-:1}"
+export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
+export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
+export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
+export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+
+exec flatpak run \
+  --env="SDL_AUDIODRIVER=${SDL_AUDIODRIVER}" \
+  --env="SDL_VIDEODRIVER=${SDL_VIDEODRIVER}" \
+  --env="LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE}" \
+  io.github.stella_emu.Stella \
+  -video software \
+  -audio.enabled 0 \
+  "$@"

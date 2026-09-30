@@ -21,4 +21,4 @@ fi
 metacity --sm-disable &
 sleep 0.5
 exec xterm -geometry 100x30+40+40 -fa DejaVuSansMono -fs 11 -ls \
-  -T "Stella VNC — flatpak run io.github.stella_emu.Stella"
+  -T "Stella VNC — stella-flatpak ~/roms/game.a26"

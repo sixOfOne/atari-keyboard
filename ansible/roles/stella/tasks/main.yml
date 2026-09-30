@@ -196,6 +196,56 @@
   when: ansible_os_family == "RedHat"
   tags: [stella, keymap]
 
+- name: Ensure python3 is present for keymap apply (Linux)
+  ansible.builtin.dnf:
+    name: python3
+    state: present
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, keymap]
+
+- name: Install keymap apply script on remote host (Linux)
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/scripts/apply_stella_keymap.py"
+    dest: "{{ ansible_env.HOME }}/.config/atari-kickoff/apply_stella_keymap.py"
+    mode: "0755"
+  when: ansible_os_family == "RedHat"
+  tags: [stella, keymap]
+
+- name: Apply Stella joystick keymap into Flatpak settings (Linux)
+  ansible.builtin.command:
+    cmd: >-
+      python3 {{ ansible_env.HOME }}/.config/atari-kickoff/apply_stella_keymap.py
+      --target flatpak
+      --flatpak-id {{ stella_flatpak_id }}
+      --json {{ ansible_env.HOME }}/.config/atari-kickoff/stella_keymap_joy.json
+  register: keymap_apply_linux
+  changed_when: >-
+    ('PASS: wrote keymap_joy' in keymap_apply_linux.stdout)
+    or ('PASS: updated event_ver' in keymap_apply_linux.stdout)
+    or ('PASS: updated user_version' in keymap_apply_linux.stdout)
+  when: ansible_os_family == "RedHat"
+  tags: [stella, keymap]
+
+- name: Restore SELinux context on Flatpak Stella config (Linux)
+  ansible.builtin.command:
+    cmd: >-
+      restorecon -RFv
+      {{ ansible_env.HOME }}/.var/app/{{ stella_flatpak_id }}/config/stella
+  register: stella_restorecon
+  changed_when: "'Relabeled' in (stella_restorecon.stdout | default(''))"
+  failed_when: false
+  when: ansible_os_family == "RedHat"
+  tags: [stella, keymap]
+
+- name: Show Flatpak keymap apply result (Linux)
+  ansible.builtin.debug:
+    var: keymap_apply_linux.stdout_lines
+  when:
+    - ansible_os_family == "RedHat"
+    - keymap_apply_linux is defined
+  tags: [stella, keymap]
+
 # --- Linux VNC / remote desktop (TigerVNC + metacity) ---
 - name: Install minimal desktop stack for VNC (Linux)
   ansible.builtin.dnf:
@@ -217,6 +267,17 @@
   ansible.builtin.copy:
     src: stella-vnc-session.sh
     dest: /usr/local/bin/stella-vnc-session
+    mode: "0755"
+    owner: root
+    group: root
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc]
+
+- name: Install Flatpak Stella launcher for TigerVNC (Linux)
+  ansible.builtin.copy:
+    src: stella-flatpak
+    dest: /usr/local/bin/stella-flatpak
     mode: "0755"
     owner: root
     group: root
@@ -339,7 +400,8 @@
     msg: >-
       VNC listening on {{ ansible_host | default(inventory_hostname) }}:{{ vnc_port }}
       (display {{ vnc_display }}). Password file on controller:
-      {{ vnc_password_file }}. Launch Stella inside the session with:
-      flatpak run io.github.stella_emu.Stella
+      {{ vnc_password_file }}. Inside the session, launch Stella with
+      stella-flatpak (software video, audio disabled). Keymap DB:
+      ~/.var/app/{{ stella_flatpak_id }}/config/stella/stella.sqlite3
   when: ansible_os_family == "RedHat"
   tags: [stella, vnc]

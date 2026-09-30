@@ -1,3 +1,7 @@
+# Flathub application id. play --target aws launches this Flatpak.
+# Settings live under ~/.var/app/<id>/config/stella/ (sandbox XDG_CONFIG_HOME).
+stella_flatpak_id: io.github.stella_emu.Stella
+
 # VNC / remote desktop (Amazon Linux / EC2)
 vnc_display: ":1"
 vnc_port: 5901

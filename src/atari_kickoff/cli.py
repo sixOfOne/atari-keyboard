@@ -25,18 +25,23 @@ SSH_KEY_DEFAULT = Path.home() / ".ssh" / "neo-atari.pem"
 REMOTE_ROM_DIR = "~/roms"  # expands on the remote host to /home/ec2-user/roms
 FLATPAK_STELLA = "io.github.stella_emu.Stella"
 VNC_DISPLAY = ":1"
-# TigerVNC on Amazon Linux: Stella's default OpenGL renderer and SDL audio
-# device abort the process (std::out_of_range after SDL audio warnings).
-# Software video and the dummy audio driver keep the window up.
-# Flatpak does not inherit arbitrary host variables, so play injects these
-# with `flatpak run --env` as well as exporting them for the SSH shell.
-# Keep in sync with ansible/roles/stella/files/stella-flatpak.
-REMOTE_SDL_ENV = (
-    ("SDL_AUDIODRIVER", "dummy"),
-    ("SDL_VIDEODRIVER", "x11"),
-    ("LIBGL_ALWAYS_SOFTWARE", "1"),
-)
-REMOTE_STELLA_ARGS = ("-video", "software", "-audio.enabled", "0")
+# Installed by configure --target aws. The wrapper keeps software video and
+# turns on PulseAudio only after the PipeWire "stella" sink is ready.
+REMOTE_STELLA_BIN = "/usr/local/bin/stella-flatpak"
+REMOTE_AUDIO_CAPTURE_BIN = "/usr/local/bin/stella-audio-capture"
+REMOTE_AUDIO_MODE_FILE = "/tmp/atari-kickoff-audio-mode"
+REMOTE_STELLA_LOG = "/tmp/atari-kickoff-stella.log"
+# auto: pulse when the sink and Flatpak socket are up, else dummy (no crash).
+# on: same path, with a warning if it falls back. off: dummy (--no-audio).
+AUDIO_AUTO = "auto"
+AUDIO_ON = "on"
+AUDIO_OFF = "off"
+AUDIO_MODES = (AUDIO_AUTO, AUDIO_ON, AUDIO_OFF)
+# TigerVNC does not forward audio. Capture is raw s16le 48 kHz stereo from
+# the stella.monitor source. Keep in sync with stella-audio-capture.
+REMOTE_AUDIO_RATE = "48000"
+REMOTE_AUDIO_CHANNELS = "2"
+VNC_AUDIO_LOG = Path.home() / ".cache" / "atari-kickoff" / "vnc-audio.log"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,6 +93,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run Stella in the foreground (local: blocks until quit; aws: keep SSH session open)",
     )
+    audio_flags = play.add_mutually_exclusive_group()
+    audio_flags.add_argument(
+        "--audio",
+        dest="audio",
+        action="store_const",
+        const=AUDIO_ON,
+        help=(
+            "request remote audio (also the default when the PipeWire sink is up). "
+            "Falls back to silent instead of crashing if the sink is missing"
+        ),
+    )
+    audio_flags.add_argument(
+        "--no-audio",
+        dest="audio",
+        action="store_const",
+        const=AUDIO_OFF,
+        help="launch Stella silent (dummy SDL driver) if audio init crashes",
+    )
+    play.set_defaults(audio=AUDIO_AUTO)
     play.add_argument(
         "--dry-run",
         action="store_true",
@@ -260,32 +284,216 @@ def build_remote_mkdir_cmd() -> str:
     return f"mkdir -p {REMOTE_ROM_DIR}"
 
 
-def build_remote_stella_cmd(remote_rom: str, *, foreground: bool) -> str:
+def _validate_audio_mode(audio: str) -> str:
+    if audio not in AUDIO_MODES:
+        raise ValueError(f"audio mode must be one of {AUDIO_MODES}, got {audio!r}")
+    return audio
+
+
+def build_remote_stella_cmd(remote_rom: str, *, foreground: bool, audio: str = AUDIO_AUTO) -> str:
     """Shell snippet run on the EC2 host to launch Flatpak Stella on the VNC display.
 
-    Uses software video and disabled audio so Stella stays up under TigerVNC.
-    SDL_* is exported in the SSH shell and passed into the sandbox with --env.
+    Software video stays on inside stella-flatpak. Audio is ATARI_AUDIO:
+    the wrapper uses PulseAudio only when the PipeWire sink and the Flatpak
+    socket are both ready, and otherwise keeps the dummy driver.
     """
+    audio = _validate_audio_mode(audio)
     rom_q = shlex.quote(remote_rom)
     exports = [
         f"export DISPLAY={shlex.quote(VNC_DISPLAY)}",
         "export XAUTHORITY=$HOME/.Xauthority",
+        'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"',
+        f"export ATARI_AUDIO={shlex.quote(audio)}",
     ]
-    env_flags: list[str] = []
-    for key, value in REMOTE_SDL_ENV:
-        exports.append(f"export {key}={shlex.quote(value)}")
-        env_flags.append(shlex.quote(f"--env={key}={value}"))
-    stella_args = " ".join(shlex.quote(arg) for arg in REMOTE_STELLA_ARGS)
-    run = f"flatpak run {' '.join(env_flags)} {FLATPAK_STELLA} {stella_args} {rom_q}"
+    run = f"{REMOTE_STELLA_BIN} {rom_q}"
     prefix = "; ".join(exports) + "; "
     if foreground:
         return prefix + run
-    # Detach so the local CLI returns immediately.
+    # Detach so the local CLI returns. The mode file is written only after
+    # the wrapper decides pulse vs dummy, so wait until it exists.
+    mode_q = shlex.quote(REMOTE_AUDIO_MODE_FILE)
     return (
         prefix
-        + f"nohup {run} >/tmp/atari-kickoff-stella.log 2>&1 </dev/null & "
-        + "echo $!; sleep 0.3"
+        + f"rm -f {mode_q}; "
+        + f"nohup {run} >{shlex.quote(REMOTE_STELLA_LOG)} 2>&1 </dev/null & "
+        + "echo $!; "
+        + "for _ in $(seq 1 50); do "
+        + f"if [ -s {mode_q} ]; then cat {mode_q}; exit 0; fi; "
+        + "sleep 0.2; done; echo unknown"
     )
+
+
+def build_remote_audio_capture_cmd() -> str:
+    """Shell snippet that writes raw PCM for the Stella sink to stdout."""
+    return (
+        'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; '
+        'if [ -S "$XDG_RUNTIME_DIR/bus" ]; then '
+        'export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"; '
+        "fi; "
+        f"exec {REMOTE_AUDIO_CAPTURE_BIN}"
+    )
+
+
+def local_pcm_player_command() -> list[str] | None:
+    """Local player for the remote s16le 48 kHz stereo stream, if one exists."""
+    if shutil.which("ffplay"):
+        return [
+            "ffplay",
+            "-nodisp",
+            "-autoexit",
+            "-loglevel",
+            "error",
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "0",
+            "-f",
+            "s16le",
+            "-ar",
+            REMOTE_AUDIO_RATE,
+            "-ac",
+            REMOTE_AUDIO_CHANNELS,
+            "-i",
+            "pipe:0",
+        ]
+    if shutil.which("mpv"):
+        return [
+            "mpv",
+            "--no-video",
+            "--really-quiet",
+            "--demuxer=rawaudio",
+            f"--demuxer-rawaudio-rate={REMOTE_AUDIO_RATE}",
+            f"--demuxer-rawaudio-channels={REMOTE_AUDIO_CHANNELS}",
+            "--demuxer-rawaudio-format=s16le",
+            "-",
+        ]
+    if shutil.which("sox"):
+        return [
+            "sox",
+            "-q",
+            "-t",
+            "raw",
+            "-r",
+            REMOTE_AUDIO_RATE,
+            "-e",
+            "signed-integer",
+            "-b",
+            "16",
+            "-c",
+            REMOTE_AUDIO_CHANNELS,
+            "-",
+            "-d",
+        ]
+    return None
+
+
+def parse_remote_launch_output(stdout: str) -> tuple[str, str]:
+    """Return (pid, audio driver) from the detached launch command."""
+    lines = [line.strip() for line in (stdout or "").splitlines() if line.strip()]
+    pid = lines[0] if lines else "(unknown)"
+    mode = lines[1] if len(lines) > 1 else "unknown"
+    return pid, mode
+
+
+def start_remote_audio_stream(
+    ssh_cmd: list[str],
+    player: list[str],
+    *,
+    detach: bool,
+) -> tuple[subprocess.Popen[bytes], subprocess.Popen[bytes]]:
+    """Pipe remote PCM into a local player. detach keeps it after this CLI exits."""
+    VNC_AUDIO_LOG.parent.mkdir(parents=True, exist_ok=True)
+    log_file = VNC_AUDIO_LOG.open("ab")
+    ssh_proc: subprocess.Popen[bytes] | None = None
+    try:
+        ssh_proc = subprocess.Popen(
+            ssh_cmd,
+            stdout=subprocess.PIPE,
+            stderr=log_file,
+            start_new_session=detach,
+        )
+        player_proc = subprocess.Popen(
+            player,
+            stdin=ssh_proc.stdout,
+            stdout=log_file,
+            stderr=log_file,
+            start_new_session=detach,
+        )
+    except Exception:
+        if ssh_proc is not None and ssh_proc.poll() is None:
+            ssh_proc.kill()
+            try:
+                ssh_proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+        log_file.close()
+        raise
+    if ssh_proc.stdout is not None:
+        ssh_proc.stdout.close()
+    log_file.close()
+    return ssh_proc, player_proc
+
+
+def stop_remote_audio_stream(
+    procs: tuple[subprocess.Popen[bytes], subprocess.Popen[bytes]] | None,
+) -> None:
+    if not procs:
+        return
+    for proc in procs:
+        if proc.poll() is None:
+            proc.terminate()
+    for proc in procs:
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)
+
+
+def _audio_listen_ssh(host: str, key: Path) -> list[str]:
+    return ssh_base_args(host, key) + [build_remote_audio_capture_cmd()]
+
+
+def _print_audio_plan(host: str, key: Path, audio: str) -> list[str] | None:
+    """Print how audio will be heard. Return the local player command, if any."""
+    if audio == AUDIO_OFF:
+        print("Audio: off (dummy SDL driver).")
+        return None
+    player = local_pcm_player_command()
+    listen = _audio_listen_ssh(host, key)
+    if player is None:
+        print(
+            "Audio: remote sink only. No local player (ffplay, mpv, or sox). "
+            "Install ffmpeg (`brew install ffmpeg`) and re-run play to hear it. "
+            f"Log path when a player is used: {VNC_AUDIO_LOG}"
+        )
+        print("   Remote capture:", _fmt_cmd(listen))
+        return None
+    print(
+        "4) Hear audio (when the driver is pulseaudio):",
+        _fmt_cmd(listen) + " | " + _fmt_cmd(player),
+    )
+    return player
+
+
+def _begin_audio_stream(
+    host: str,
+    key: Path,
+    player: list[str] | None,
+    *,
+    detach: bool,
+) -> tuple[subprocess.Popen[bytes], subprocess.Popen[bytes]] | None:
+    if player is None:
+        return None
+    procs = start_remote_audio_stream(
+        _audio_listen_ssh(host, key), player, detach=detach
+    )
+    print(f"Audio streaming to this machine (player pid {procs[1].pid}); log: {VNC_AUDIO_LOG}")
+    return procs
 
 
 def cmd_play_aws(
@@ -294,7 +502,9 @@ def cmd_play_aws(
     dry_run: bool,
     foreground: bool,
     ssh_key: str,
+    audio: str = AUDIO_AUTO,
 ) -> int:
+    audio = _validate_audio_mode(audio)
     rom = resolve_rom(rom_arg)
     key = Path(ssh_key).expanduser()
     if not dry_run and not key.is_file():
@@ -307,7 +517,9 @@ def cmd_play_aws(
     remote_rom = remote_rom_path(rom)
     mkdir_remote = build_remote_mkdir_cmd()
     scp_cmd = scp_base_args(key) + [str(rom), f"{SSH_USER}@{host}:{remote_rom}"]
-    launch_remote = build_remote_stella_cmd(remote_rom, foreground=foreground)
+    launch_remote = build_remote_stella_cmd(
+        remote_rom, foreground=foreground, audio=audio
+    )
     ssh_mkdir = ssh_base_args(host, key) + [mkdir_remote]
     ssh_launch = ssh_base_args(host, key) + [launch_remote]
 
@@ -316,13 +528,14 @@ def cmd_play_aws(
     print(f"ROM (remote): {remote_rom}")
     print(f"Keymap: {REPO_ROOT / 'config' / 'keymap.yaml'}")
     print(
-        "Launch profile: software video, audio disabled, "
-        "SDL dummy driver on X11 (TigerVNC)"
+        "Launch profile: software video; "
+        f"audio {audio} (PipeWire pulse when the stella sink is up, else silent)"
     )
     print(f"VNC display: {VNC_DISPLAY} (connect vnc://{host}:5901)")
     print("1) Ensure remote ROM dir:", _fmt_cmd(ssh_mkdir))
     print("2) Sync ROM:", _fmt_cmd(scp_cmd))
     print("3) Launch Stella:", _fmt_cmd(ssh_launch))
+    player = _print_audio_plan(host, key, audio)
 
     if dry_run:
         print("Dry run only; no SSH/SCP performed.")
@@ -339,8 +552,12 @@ def cmd_play_aws(
 
     if foreground:
         print("Starting remote Stella in the foreground (quit Stella / Ctrl-C to return).")
-        completed = subprocess.run(ssh_launch, check=False)
-        return completed.returncode
+        listener = _begin_audio_stream(host, key, player, detach=False)
+        try:
+            completed = subprocess.run(ssh_launch, check=False)
+            return completed.returncode
+        finally:
+            stop_remote_audio_stream(listener)
 
     completed = subprocess.run(ssh_launch, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
@@ -350,10 +567,21 @@ def cmd_play_aws(
             file=sys.stderr,
         )
         return completed.returncode
-    pid = (completed.stdout or "").strip().splitlines()
-    pid_msg = pid[0] if pid else "(unknown)"
-    print(f"Stella launched on AWS (remote pid ~{pid_msg}); log: /tmp/atari-kickoff-stella.log")
+    pid_msg, mode = parse_remote_launch_output(completed.stdout or "")
+    print(f"Stella launched on AWS (remote pid ~{pid_msg}); log: {REMOTE_STELLA_LOG}")
     print(f"View via VNC: vnc://{host}:5901")
+    if audio == AUDIO_OFF or mode == "dummy":
+        if audio == AUDIO_ON:
+            print(
+                "Audio requested, but the PipeWire sink or Flatpak socket was not ready. "
+                f"Stella is silent. Log: {REMOTE_STELLA_LOG}",
+                file=sys.stderr,
+            )
+        else:
+            print("Audio: silent (dummy SDL driver). Re-run configure --target aws if this is unexpected.")
+        return 0
+    print(f"Audio driver: {mode}")
+    _begin_audio_stream(host, key, player, detach=True)
     return 0
 
 
@@ -364,12 +592,19 @@ def cmd_play(
     dry_run: bool,
     target: str = "local",
     ssh_key: str = str(SSH_KEY_DEFAULT),
+    audio: str = AUDIO_AUTO,
 ) -> int:
     if target == "aws":
         return cmd_play_aws(
-            rom_arg, dry_run=dry_run, foreground=foreground, ssh_key=ssh_key
+            rom_arg,
+            dry_run=dry_run,
+            foreground=foreground,
+            ssh_key=ssh_key,
+            audio=audio,
         )
 
+    if audio != AUDIO_AUTO:
+        print("Note: --audio and --no-audio apply to --target aws. Local Stella is unchanged.")
     rom = resolve_rom(rom_arg)
     cmd = launch_command(rom, foreground=foreground)
     print(f"ROM: {rom}")
@@ -460,6 +695,7 @@ def main(argv=None) -> int:
             dry_run=args.dry_run,
             target=args.target,
             ssh_key=args.ssh_key,
+            audio=args.audio,
         )
     return 1
 

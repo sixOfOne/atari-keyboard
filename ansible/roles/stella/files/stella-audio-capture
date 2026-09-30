@@ -1,0 +1,36 @@
+#!/bin/bash
+# Write the Stella sink monitor to stdout as raw s16le, 48 kHz, stereo.
+# TigerVNC does not forward audio. `play --target aws` pipes this into a
+# local player (ffplay, mpv, or sox) over SSH.
+set -euo pipefail
+
+uid=$(id -u)
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/${uid}}"
+if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "${XDG_RUNTIME_DIR}/bus" ]]; then
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+fi
+
+if [[ -x /usr/local/bin/stella-audio-setup ]]; then
+  /usr/local/bin/stella-audio-setup
+fi
+
+if command -v parec >/dev/null 2>&1; then
+  exec parec \
+    --device=stella.monitor \
+    --format=s16le \
+    --rate=48000 \
+    --channels=2 \
+    --latency-msec=50
+fi
+
+if command -v pw-cat >/dev/null 2>&1; then
+  exec pw-cat --record \
+    --target stella.monitor \
+    --format s16 \
+    --rate 48000 \
+    --channels 2 \
+    -
+fi
+
+echo "stella-audio-capture: need parec (pulseaudio-utils) or pw-cat (pipewire-utils)" >&2
+exit 1

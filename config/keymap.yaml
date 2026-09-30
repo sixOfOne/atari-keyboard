@@ -1,9 +1,12 @@
 # Host keyboard -> Atari left joystick (applied to Stella).
 #
-# Stella persists remaps in:
-#   ~/Library/Application Support/Stella/stella.sqlite3  (setting: keymap_joy)
+# Stella persists remaps in stella.sqlite3, setting keymap_joy.
+# The row is loaded only when event_ver matches the build (6 for Stella 7).
+#   macOS:   ~/Library/Application Support/Stella/stella.sqlite3
+#   Flatpak: ~/.var/app/io.github.stella_emu.Stella/config/stella/stella.sqlite3
 # A full snapshot of that map lives in config/stella_keymap_joy.json.
 # Re-apply with: python3 scripts/apply_stella_keymap.py
+# On the EC2 host: python3 ~/.config/atari-kickoff/apply_stella_keymap.py --target flatpak
 #
 # Defaults already present in Stella (kept):
 #   arrows / keypad  -> direction

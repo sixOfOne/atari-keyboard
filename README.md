@@ -5,9 +5,9 @@ Keyboard-controlled Atari 2600 play via [Stella](https://stella-emu.github.io/),
 ## What’s working today
 
 - **Local (macOS):** Stella app + PATH symlink, WASD/arrows/fire keymap, Pac-Man ROM (gitignored), smoke test, `play` / `configure` / `apply` CLI.
-- **AWS (us-east-2):** EC2 `t3.small`, 8 GB gp3 root, SSH locked to your IP, Ansible inventory from Terraform outputs, Flatpak Stella (`io.github.stella_emu.Stella`).
+- **AWS (us-east-2):** EC2 `t3.small`, 8 GB gp3 root, SSH locked to your IP, Ansible inventory from Terraform outputs, Flatpak Stella (`io.github.stella_emu.Stella`) with the same WASD/arrows/fire map as local.
 - **AWS VNC:** TigerVNC on display `:1` (TCP **5901**), minimal metacity + xterm session; password only in `~/.config/atari-kickoff/vnc-password.txt` (mode 600, never committed).
-- **Remote play:** `play --target aws` syncs a ROM over SCP to `~/roms/` on EC2 and launches Flatpak Stella on `DISPLAY=:1` (non-blocking by default), using software video, dummy audio, and X11/GL software-rendering settings for VNC.
+- **Remote play:** `play --target aws` syncs a ROM over SCP to `~/roms/` on EC2 and launches Flatpak Stella on `DISPLAY=:1` with software video and audio disabled so the window stays up under TigerVNC (non-blocking by default).
 
 ## Layout
 
@@ -97,10 +97,59 @@ PYTHONPATH=src python3 -m atari_kickoff play Pac-Man --target aws
 
 SSH identity defaults to `~/.ssh/neo-atari.pem` (`--ssh-key` to override). Host comes from `terraform output` (`public_ip` / `ssh_host`), not a hardcoded IP. Use `--foreground` to keep the SSH session attached to Stella.
 
-Or launch manually inside the VNC xterm:
+Or launch manually inside the VNC xterm (same flags `play --target aws` uses):
 
 ```bash
-flatpak run io.github.stella_emu.Stella -video software -audio.enabled 0 ~/roms/"Pac-Man (NA).a26"
+stella-flatpak ~/roms/"Pac-Man (NA).a26"
+```
+
+`stella-flatpak` is installed by `configure --target aws`. It runs Flatpak Stella with software video and the dummy SDL audio driver. Under TigerVNC the default OpenGL path and SDL audio device abort Stella (`std::out_of_range` after SDL audio warnings). The wrapper injects `SDL_AUDIODRIVER`, `SDL_VIDEODRIVER`, and `LIBGL_ALWAYS_SOFTWARE` with `flatpak run --env` so the sandbox receives them.
+
+Equivalent command:
+
+```bash
+DISPLAY=:1 XAUTHORITY=$HOME/.Xauthority \
+SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11 LIBGL_ALWAYS_SOFTWARE=1 \
+flatpak run \
+  --env=SDL_AUDIODRIVER=dummy \
+  --env=SDL_VIDEODRIVER=x11 \
+  --env=LIBGL_ALWAYS_SOFTWARE=1 \
+  io.github.stella_emu.Stella \
+  -video software -audio.enabled 0 \
+  ~/roms/"Pac-Man (NA).a26"
+```
+
+### Flatpak keymap (WASD / arrows / fire)
+
+`configure --target aws` loads `config/stella_keymap_joy.json` into Flatpak Stella’s settings database:
+
+`~/.var/app/io.github.stella_emu.Stella/config/stella/stella.sqlite3`
+
+Stella 7 reads `$XDG_CONFIG_HOME/stella/stella.sqlite3`. Inside this Flatpak, `XDG_CONFIG_HOME` is `~/.var/app/io.github.stella_emu.Stella/config`, so the database is the path above. The copies under `~/.config/atari-kickoff/` are the snapshot the apply script reads. Stella loads `keymap_joy` when `event_ver` is `6` (Stella 7’s event-list version). The apply step sets that when the database is new or still on Stella’s default `1`, and leaves any other saved version as it is.
+
+Quit Stella before re-applying (a running process writes the database on exit), then relaunch.
+
+Re-apply on the instance without a full playbook:
+
+```bash
+python3 ~/.config/atari-kickoff/apply_stella_keymap.py --target flatpak
+```
+
+Check the rows, then confirm in the VNC window that WASD and the arrow keys move and space or left ctrl fires:
+
+```bash
+python3 - <<'PY'
+import json, sqlite3
+from pathlib import Path
+db = Path.home() / ".var/app/io.github.stella_emu.Stella/config/stella/stella.sqlite3"
+rows = dict(sqlite3.connect(db).execute(
+    "SELECT setting, value FROM settings WHERE setting IN ('keymap_joy','event_ver')"
+))
+keys = {item["key"] for item in json.loads(rows["keymap_joy"])}
+print("event_ver", rows.get("event_ver"))
+for key in ("w", "a", "s", "d", "up", "down", "left", "right", "space"):
+    print(key, "yes" if key in keys else "no")
+PY
 ```
 
 5. Quick port check from the Mac:
@@ -109,8 +158,6 @@ flatpak run io.github.stella_emu.Stella -video software -audio.enabled 0 ~/roms/
 nc -vz "$(cd terraform && terraform output -raw public_ip)" 5901
 ```
 
-
-Keymap intent + joy JSON land in `~/.config/atari-kickoff/` on the remote host.
 
 ## CLI cheat sheet
 
@@ -129,5 +176,4 @@ Keymap intent + joy JSON land in `~/.config/atari-kickoff/` on the remote host.
 
 ## Next up
 
-1. Apply Flatpak/Stella keymap inside the VNC session (joy map currently copied to `~/.config/atari-kickoff/` but not wired into Flatpak Stella settings).
-2. Harden SSH further if the host stays up long-term (optional: prefer SSH tunnel + `localhost` VNC).
+1. Harden SSH further if the host stays up long-term (optional: prefer SSH tunnel + `localhost` VNC).

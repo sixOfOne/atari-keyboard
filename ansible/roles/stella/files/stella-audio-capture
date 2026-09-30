@@ -1,7 +1,10 @@
 #!/bin/bash
-# Write the Stella sink monitor to stdout as raw s16le, 48 kHz, stereo.
+# Write the Stella sink to stdout as raw s16le, 48 kHz, stereo.
 # TigerVNC does not forward audio. `play --target aws` pipes this into a
-# local player (ffplay, mpv, or sox) over SSH.
+# local player (sox play, ffmpeg audiotoolbox, or ffplay) over SSH.
+#
+# Prefer pw-cat --target stella. Recording stella.monitor via parec often
+# returns silence while Stella is playing into the stella sink.
 set -euo pipefail
 
 uid=$(id -u)
@@ -14,6 +17,15 @@ if [[ -x /usr/local/bin/stella-audio-setup ]]; then
   /usr/local/bin/stella-audio-setup
 fi
 
+if command -v pw-cat >/dev/null 2>&1; then
+  exec pw-cat --record \
+    --target stella \
+    --format s16 \
+    --rate 48000 \
+    --channels 2 \
+    -
+fi
+
 if command -v parec >/dev/null 2>&1; then
   exec parec \
     --device=stella.monitor \
@@ -23,14 +35,5 @@ if command -v parec >/dev/null 2>&1; then
     --latency-msec=50
 fi
 
-if command -v pw-cat >/dev/null 2>&1; then
-  exec pw-cat --record \
-    --target stella.monitor \
-    --format s16 \
-    --rate 48000 \
-    --channels 2 \
-    -
-fi
-
-echo "stella-audio-capture: need parec (pulseaudio-utils) or pw-cat (pipewire-utils)" >&2
+echo "stella-audio-capture: need pw-cat (pipewire-utils) or parec (pulseaudio-utils)" >&2
 exit 1

@@ -123,7 +123,7 @@ TigerVNC carries the picture and the keyboard. It does not carry sound. `configu
 
 Otherwise it launches with `SDL_AUDIODRIVER=dummy` and `-audio.enabled 0`. `ATARI_AUDIO=auto` (what `play` exports by default) and `ATARI_AUDIO=on` (`--audio`) use that probe. `ATARI_AUDIO=off` (`--no-audio`) skips it. The chosen driver is written to `/tmp/atari-kickoff-audio-mode`.
 
-`play --target aws` then SSHs `stella-audio-capture` (raw s16le, 48 kHz, stereo) into `ffplay`, `mpv`, or `sox` on the machine you ran `play` from. The player is detached; its log is `~/.cache/atari-kickoff/vnc-audio.log`. Screen Sharing’s volume control does not affect this stream.
+`play --target aws` then SSHs `stella-audio-capture` (raw s16le, 48 kHz, stereo via `pw-cat --target stella`) into local `play` (sox), `ffmpeg -f audiotoolbox`, or `ffplay` on the machine you ran `play` from. Audio stays attached to that Terminal’s session — leave the Terminal open for sound; closing it stops playback. Log: `~/.cache/atari-kickoff/vnc-audio.log`. Screen Sharing’s volume control does not affect this stream.
 
 #### Verify
 
@@ -151,15 +151,14 @@ for i in range(rate * 2):
 PY
 ```
 
-On the Mac, install a player once (`brew install ffmpeg`) and listen:
+On the Mac, install a player once (`brew install sox`, or `brew install ffmpeg`) and listen:
 
 ```bash
 ssh -i ~/.ssh/neo-atari.pem ec2-user@<public_ip> /usr/local/bin/stella-audio-capture \
-  | ffplay -nodisp -loglevel error -fflags nobuffer -flags low_delay \
-      -probesize 32 -analyzeduration 0 -f s16le -ar 48000 -ch_layout stereo -i pipe:0
+  | /opt/homebrew/bin/play -q -t raw -r 48000 -e signed-integer -b 16 -c 2 -
 ```
 
-You should hear the tone. Stop `ffplay`, then launch the game:
+You should hear the tone. Stop playback, then launch the game:
 
 ```bash
 PYTHONPATH=src python3 -m atari_kickoff play Pac-Man --target aws
@@ -175,7 +174,7 @@ PYTHONPATH=src python3 -m atari_kickoff play Pac-Man --target aws --dry-run
 
 - **The game is silent and `/tmp/atari-kickoff-audio-mode` says `dummy`.** Re-run `configure --target aws`. On the host, `pactl info` should succeed. Stella’s own log is `/tmp/atari-kickoff-stella.log`.
 - **`std::out_of_range` or SDL audio warnings in that log.** The probe should have stayed on the dummy driver. Force it with `--no-audio` and keep playing. Software video stays on either way.
-- **`pactl` looks fine but the Mac is quiet.** Screen Sharing will not play this audio. Install `ffmpeg`, `mpv`, or `sox` locally and re-run `play`. `~/.cache/atari-kickoff/vnc-audio.log` has the player and SSH errors.
+- **`pactl` looks fine but the Mac is quiet.** Screen Sharing will not play this audio. Install `sox` (`brew install sox`) or `ffmpeg` locally, re-run `play` in your own Terminal, and leave that Terminal open. `~/.cache/atari-kickoff/vnc-audio.log` has the player and SSH errors. Prefer `pw-cat --target stella` on the host over `parec`/`stella.monitor` (the monitor often returns silence).
 - **`stella-audio` failed at configure time.** On the instance: `journalctl --user -u pipewire-pulse -u wireplumber -u stella-audio --no-pager -n 100`. Lingering is `/var/lib/systemd/linger/ec2-user`; the user bus is `/run/user/$(id -u)/bus`.
 - **Flatpak cannot open the socket (SELinux).** `sudo ausearch -m avc -ts recent`. A failed sandbox probe leaves Stella silent instead of crashing.
 - **Crackling or a short delay.** EC2 is a VM, so PipeWire already uses a larger quantum there. The SSH stream adds a bit more delay. That delay is separate from the VNC picture.

@@ -60,6 +60,17 @@ if ! pactl list short sinks | awk '{print $2}' | grep -qxF stella; then
 fi
 pactl set-default-sink stella
 
+# Flatpak --socket=pulseaudio expects these host-side links:
+#   $XDG_RUNTIME_DIR/flatpak/pulse -> ../pulse
+#   $XDG_RUNTIME_DIR/.flatpak/<app>/xdg-run/pulse -> ../../flatpak/pulse
+# Without them the sandbox probe can miss the PipeWire pulse socket.
+mkdir -p "${XDG_RUNTIME_DIR}/flatpak"
+ln -sfn ../pulse "${XDG_RUNTIME_DIR}/flatpak/pulse"
+app_xdg="${XDG_RUNTIME_DIR}/.flatpak/io.github.stella_emu.Stella/xdg-run"
+if [[ -d "${app_xdg}" ]]; then
+  ln -sfn ../../flatpak/pulse "${app_xdg}/pulse"
+fi
+
 monitor=0
 for _ in $(seq 1 25); do
   if pactl list short sources | awk '{print $2}' | grep -qxF stella.monitor; then

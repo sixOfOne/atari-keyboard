@@ -382,21 +382,22 @@ def test_audio_player_and_flags() -> None:
     import atari_kickoff.cli as cli
 
     original_which = cli.shutil.which
+    original_resolve = cli._resolve_bin
 
     def which_ffplay(name: str) -> str | None:
         return "/usr/bin/ffplay" if name == "ffplay" else None
 
-    def which_sox(name: str) -> str | None:
-        return "/usr/bin/sox" if name == "sox" else None
-
     def which_none(_name: str) -> str | None:
         return None
 
+    # No sox/ffmpeg on PATH → fall through to ffplay.
+    cli._resolve_bin = lambda *c: None
     cli.shutil.which = which_ffplay
     try:
         player = cli.local_pcm_player_command()
     finally:
         cli.shutil.which = original_which
+        cli._resolve_bin = original_resolve
     if (
         not player
         or player[0] != "ffplay"
@@ -408,19 +409,56 @@ def test_audio_player_and_flags() -> None:
     ):
         fail(f"ffplay command unexpected: {player}")
 
-    cli.shutil.which = which_sox
+    # Prefer Homebrew sox play over everything else.
+    def resolve_play(*candidates: str) -> str | None:
+        if "/opt/homebrew/bin/play" in candidates or "play" in candidates:
+            return "/opt/homebrew/bin/play"
+        return None
+
+    cli._resolve_bin = resolve_play
+    cli.shutil.which = which_ffplay
     try:
-        sox_player = cli.local_pcm_player_command()
+        play_player = cli.local_pcm_player_command()
     finally:
         cli.shutil.which = original_which
-    if not sox_player or sox_player[0] != "sox" or "-d" not in sox_player:
-        fail(f"sox command unexpected: {sox_player}")
+        cli._resolve_bin = original_resolve
+    if (
+        not play_player
+        or play_player[0] != "/opt/homebrew/bin/play"
+        or "-t" not in play_player
+        or "raw" not in play_player
+        or "48000" not in play_player
+    ):
+        fail(f"sox play command unexpected: {play_player}")
 
+    # Next preference: ffmpeg AudioToolbox.
+    def resolve_ffmpeg(*candidates: str) -> str | None:
+        if any("ffmpeg" in c for c in candidates):
+            return "/opt/homebrew/bin/ffmpeg"
+        return None
+
+    cli._resolve_bin = resolve_ffmpeg
+    cli.shutil.which = which_ffplay
+    try:
+        ffmpeg_player = cli.local_pcm_player_command()
+    finally:
+        cli.shutil.which = original_which
+        cli._resolve_bin = original_resolve
+    if (
+        not ffmpeg_player
+        or ffmpeg_player[0] != "/opt/homebrew/bin/ffmpeg"
+        or "audiotoolbox" not in ffmpeg_player
+        or "s16le" not in ffmpeg_player
+    ):
+        fail(f"ffmpeg audiotoolbox command unexpected: {ffmpeg_player}")
+
+    cli._resolve_bin = lambda *c: None
     cli.shutil.which = which_none
     try:
         missing = cli.local_pcm_player_command()
     finally:
         cli.shutil.which = original_which
+        cli._resolve_bin = original_resolve
     if missing is not None:
         fail(f"expected no player, got {missing}")
 
@@ -484,6 +522,8 @@ def test_audio_scripts_and_ansible() -> None:
         if token not in setup:
             fail(f"stella-audio-setup missing {token!r}")
     for token in (
+        "pw-cat --record",
+        "--target stella",
         "--device=stella.monitor",
         "--format=s16le",
         "--rate=48000",
@@ -492,6 +532,15 @@ def test_audio_scripts_and_ansible() -> None:
     ):
         if token not in capture:
             fail(f"stella-audio-capture missing {token!r}")
+    # pw-cat targeting stella must come before the parec fallback.
+    if capture.index("pw-cat --record") > capture.index("--device=stella.monitor"):
+        fail("stella-audio-capture must prefer pw-cat --target stella over parec")
+    for token in (
+        'ln -sfn ../pulse "${XDG_RUNTIME_DIR}/flatpak/pulse"',
+        "../../flatpak/pulse",
+    ):
+        if token not in setup:
+            fail(f"stella-audio-setup missing Flatpak pulse symlink {token!r}")
     if "stella-audio-setup" not in session or "XDG_RUNTIME_DIR" not in session:
         fail("VNC session does not start the audio sink")
     if "ExecStart=/usr/local/bin/stella-audio-setup" not in unit:

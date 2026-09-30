@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import platform
 import shlex
@@ -38,7 +39,7 @@ AUDIO_ON = "on"
 AUDIO_OFF = "off"
 AUDIO_MODES = (AUDIO_AUTO, AUDIO_ON, AUDIO_OFF)
 # TigerVNC does not forward audio. Capture is raw s16le 48 kHz stereo from
-# the stella.monitor source. Keep in sync with stella-audio-capture.
+# the stella sink (pw-cat --target stella). Keep in sync with stella-audio-capture.
 REMOTE_AUDIO_RATE = "48000"
 REMOTE_AUDIO_CHANNELS = "2"
 VNC_AUDIO_LOG = Path.home() / ".cache" / "atari-kickoff" / "vnc-audio.log"
@@ -334,8 +335,62 @@ def build_remote_audio_capture_cmd() -> str:
     )
 
 
+def _resolve_bin(*candidates: str) -> str | None:
+    """Return the first existing executable path from candidates or PATH names."""
+    for candidate in candidates:
+        if "/" in candidate:
+            path = Path(candidate)
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path)
+        else:
+            found = shutil.which(candidate)
+            if found:
+                return found
+    return None
+
+
 def local_pcm_player_command() -> list[str] | None:
-    """Local player for the remote s16le 48 kHz stereo stream, if one exists."""
+    """Local player for the remote s16le 48 kHz stereo stream, if one exists.
+
+    Prefer sox `play` (Homebrew path first): ffplay on raw s16le is unreliable
+    on some Macs. Fall back to ffmpeg AudioToolbox, then ffplay, then mpv.
+    """
+    play_bin = _resolve_bin("/opt/homebrew/bin/play", "play")
+    if play_bin:
+        return [
+            play_bin,
+            "-q",
+            "-t",
+            "raw",
+            "-r",
+            REMOTE_AUDIO_RATE,
+            "-e",
+            "signed-integer",
+            "-b",
+            "16",
+            "-c",
+            REMOTE_AUDIO_CHANNELS,
+            "-",
+        ]
+    ffmpeg = _resolve_bin("/opt/homebrew/bin/ffmpeg", "ffmpeg")
+    if ffmpeg:
+        return [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "s16le",
+            "-ar",
+            REMOTE_AUDIO_RATE,
+            "-ac",
+            REMOTE_AUDIO_CHANNELS,
+            "-i",
+            "pipe:0",
+            "-f",
+            "audiotoolbox",
+            "default",
+        ]
     if shutil.which("ffplay"):
         return [
             "ffplay",
@@ -371,23 +426,6 @@ def local_pcm_player_command() -> list[str] | None:
             "--demuxer-rawaudio-format=s16le",
             "-",
         ]
-    if shutil.which("sox"):
-        return [
-            "sox",
-            "-q",
-            "-t",
-            "raw",
-            "-r",
-            REMOTE_AUDIO_RATE,
-            "-e",
-            "signed-integer",
-            "-b",
-            "16",
-            "-c",
-            REMOTE_AUDIO_CHANNELS,
-            "-",
-            "-d",
-        ]
     return None
 
 
@@ -405,7 +443,12 @@ def start_remote_audio_stream(
     *,
     detach: bool,
 ) -> tuple[subprocess.Popen[bytes], subprocess.Popen[bytes]]:
-    """Pipe remote PCM into a local player. detach keeps it after this CLI exits."""
+    """Pipe remote PCM into a local player.
+
+    detach=True starts a new session so audio survives this CLI exit.
+    Prefer detach=False so audio stays in this Terminal's session: closing
+    the Terminal stops sound; leaving it open keeps sound.
+    """
     VNC_AUDIO_LOG.parent.mkdir(parents=True, exist_ok=True)
     log_file = VNC_AUDIO_LOG.open("ab")
     ssh_proc: subprocess.Popen[bytes] | None = None
@@ -467,8 +510,8 @@ def _print_audio_plan(host: str, key: Path, audio: str) -> list[str] | None:
     listen = _audio_listen_ssh(host, key)
     if player is None:
         print(
-            "Audio: remote sink only. No local player (ffplay, mpv, or sox). "
-            "Install ffmpeg (`brew install ffmpeg`) and re-run play to hear it. "
+            "Audio: remote sink only. No local player (sox play, ffmpeg, or ffplay). "
+            "Install sox (`brew install sox`) or ffmpeg and re-run play to hear it. "
             f"Log path when a player is used: {VNC_AUDIO_LOG}"
         )
         print("   Remote capture:", _fmt_cmd(listen))
@@ -553,6 +596,8 @@ def cmd_play_aws(
     if foreground:
         print("Starting remote Stella in the foreground (quit Stella / Ctrl-C to return).")
         listener = _begin_audio_stream(host, key, player, detach=False)
+        if listener is not None:
+            print("Leave this Terminal open for remote audio.")
         try:
             completed = subprocess.run(ssh_launch, check=False)
             return completed.returncode
@@ -581,7 +626,11 @@ def cmd_play_aws(
             print("Audio: silent (dummy SDL driver). Re-run configure --target aws if this is unexpected.")
         return 0
     print(f"Audio driver: {mode}")
-    _begin_audio_stream(host, key, player, detach=True)
+    # Keep audio in this Terminal's session (no start_new_session). Agent-started
+    # detached streams get killed; the user must leave this Terminal open.
+    listener = _begin_audio_stream(host, key, player, detach=False)
+    if listener is not None:
+        print("Leave this Terminal open for remote audio.")
     return 0
 
 

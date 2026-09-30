@@ -2,7 +2,10 @@
 # Settings live under ~/.var/app/<id>/config/stella/ (sandbox XDG_CONFIG_HOME).
 stella_flatpak_id: io.github.stella_emu.Stella
 
-# VNC / remote desktop (Amazon Linux / EC2)
+# VNC / remote desktop (Amazon Linux / EC2).
+# vncserver-config-mandatory forces `localhost`, so TCP 5901 is loopback only.
+# Connect with: ssh -L 5901:127.0.0.1:5901 ec2-user@HOST
+# then: vnc://127.0.0.1:5901
 vnc_display: ":1"
 vnc_port: 5901
 vnc_geometry: "1280x720"

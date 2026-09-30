@@ -26,6 +26,8 @@ SSH_KEY_DEFAULT = Path.home() / ".ssh" / "neo-atari.pem"
 REMOTE_ROM_DIR = "~/roms"  # expands on the remote host to /home/ec2-user/roms
 FLATPAK_STELLA = "io.github.stella_emu.Stella"
 VNC_DISPLAY = ":1"
+VNC_PORT = 5901
+VNC_LOCAL_URL = f"vnc://127.0.0.1:{VNC_PORT}"
 # Installed by configure --target aws. The wrapper keeps software video and
 # turns on PulseAudio only after the PipeWire "stella" sink is ready.
 REMOTE_STELLA_BIN = "/usr/local/bin/stella-flatpak"
@@ -122,6 +124,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--ssh-key",
         default=str(SSH_KEY_DEFAULT),
         help=f"SSH private key for AWS target (default: {SSH_KEY_DEFAULT})",
+    )
+    play.add_argument(
+        "--vnc-tunnel",
+        action="store_true",
+        help=(
+            "with --target aws, print the SSH local-forward command and "
+            f"{VNC_LOCAL_URL}, then exit (no ROM sync)"
+        ),
     )
     return parser
 
@@ -248,6 +258,27 @@ def resolve_aws_ssh_host() -> str:
             "`PYTHONPATH=src python3 -m atari_kickoff apply`."
         )
     return str(ip)
+
+
+def vnc_tunnel_argv(host: str, key: Path) -> list[str]:
+    """SSH local forward. TigerVNC listens on the instance loopback only."""
+    return [
+        "ssh",
+        "-i",
+        str(key),
+        "-L",
+        f"{VNC_PORT}:127.0.0.1:{VNC_PORT}",
+        f"{SSH_USER}@{host}",
+    ]
+
+
+def print_vnc_tunnel(host: str, key: Path) -> None:
+    print(
+        f"VNC listens on 127.0.0.1:{VNC_PORT} on the instance. "
+        f"TCP {VNC_PORT} is not open on the security group."
+    )
+    print("Tunnel:", _fmt_cmd(vnc_tunnel_argv(host, key)))
+    print(f"Then connect: {VNC_LOCAL_URL}")
 
 
 def ssh_base_args(host: str, key: Path) -> list[str]:
@@ -574,7 +605,8 @@ def cmd_play_aws(
         "Launch profile: software video; "
         f"audio {audio} (PipeWire pulse when the stella sink is up, else silent)"
     )
-    print(f"VNC display: {VNC_DISPLAY} (connect vnc://{host}:5901)")
+    print(f"VNC display: {VNC_DISPLAY} on the instance loopback")
+    print_vnc_tunnel(host, key)
     print("1) Ensure remote ROM dir:", _fmt_cmd(ssh_mkdir))
     print("2) Sync ROM:", _fmt_cmd(scp_cmd))
     print("3) Launch Stella:", _fmt_cmd(ssh_launch))
@@ -614,7 +646,7 @@ def cmd_play_aws(
         return completed.returncode
     pid_msg, mode = parse_remote_launch_output(completed.stdout or "")
     print(f"Stella launched on AWS (remote pid ~{pid_msg}); log: {REMOTE_STELLA_LOG}")
-    print(f"View via VNC: vnc://{host}:5901")
+    print(f"View via VNC: {VNC_LOCAL_URL} (keep the SSH tunnel open)")
     if audio == AUDIO_OFF or mode == "dummy":
         if audio == AUDIO_ON:
             print(
@@ -642,7 +674,14 @@ def cmd_play(
     target: str = "local",
     ssh_key: str = str(SSH_KEY_DEFAULT),
     audio: str = AUDIO_AUTO,
+    vnc_tunnel: bool = False,
 ) -> int:
+    if vnc_tunnel and target != "aws":
+        raise SystemExit("--vnc-tunnel applies to --target aws.")
+    if target == "aws" and vnc_tunnel:
+        host = resolve_aws_ssh_host()
+        print_vnc_tunnel(host, Path(ssh_key).expanduser())
+        return 0
     if target == "aws":
         return cmd_play_aws(
             rom_arg,
@@ -697,8 +736,12 @@ def cmd_configure(*, target: str = "local", dry_run: bool = False) -> int:
     print("Launch:", " ".join(cmd))
     if dry_run:
         print("Dry run only; Ansible not started.")
+        if target == "aws":
+            print_vnc_tunnel(resolve_aws_ssh_host(), SSH_KEY_DEFAULT)
         return 0
     completed = subprocess.run(cmd, cwd=str(REPO_ROOT / "ansible"), check=False)
+    if target == "aws" and completed.returncode == 0:
+        print_vnc_tunnel(resolve_aws_ssh_host(), SSH_KEY_DEFAULT)
     return completed.returncode
 
 
@@ -745,6 +788,7 @@ def main(argv=None) -> int:
             target=args.target,
             ssh_key=args.ssh_key,
             audio=args.audio,
+            vnc_tunnel=args.vnc_tunnel,
         )
     return 1
 

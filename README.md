@@ -6,7 +6,7 @@ Keyboard-controlled Atari 2600 play via [Stella](https://stella-emu.github.io/),
 
 - **Local (macOS):** Stella app + PATH symlink, WASD/arrows/fire keymap, Pac-Man ROM (gitignored), smoke test, `play` / `configure` / `apply` CLI.
 - **AWS (us-east-2):** EC2 `t3.small`, 8 GB gp3 root, SSH locked to your IP, Ansible inventory from Terraform outputs, Flatpak Stella (`io.github.stella_emu.Stella`) with the same WASD/arrows/fire map as local.
-- **AWS VNC:** TigerVNC on display `:1` (TCP **5901**), minimal metacity + xterm session; password only in `~/.config/atari-kickoff/vnc-password.txt` (mode 600, never committed).
+- **AWS VNC:** TigerVNC on display `:1`, bound to **127.0.0.1:5901** (not in the security group). Minimal metacity + xterm session; password only in `~/.config/atari-kickoff/vnc-password.txt` (mode 600, never committed). Connect through an SSH tunnel, then `vnc://127.0.0.1:5901`.
 - **Remote play:** `play --target aws` syncs a ROM over SCP to `~/roms/` on EC2 and launches Flatpak Stella on `DISPLAY=:1` with software video. Audio uses a PipeWire pulse sink when that server is up, and stays silent (dummy SDL driver) when it is not, so a missing sound device cannot crash Stella. TigerVNC carries the picture only; the CLI plays the sink back on this machine over SSH.
 
 ## Layout
@@ -16,7 +16,7 @@ config/           keymap + Stella joy map snapshot + games.yaml
 roms/             local ROMs only (gitignored; keep .gitkeep)
 scripts/          smoke_test, apply_stella_keymap, render_aws_inventory
 src/atari_kickoff CLI entrypoint
-ansible/          localhost + aws inventories, stella role
+ansible/          localhost + aws inventories, sshd + stella roles
 terraform/        local marker by default; EC2 when enable_aws=true
 ```
 
@@ -40,7 +40,7 @@ Optional local Ansible (symlink + keymap):
 ## AWS path
 
 1. Copy `terraform/terraform.tfvars.example` → `terraform/terraform.tfvars` (gitignored).
-2. Set `enable_aws`, `aws_region`, `key_name`, `ssh_ingress_cidr` (your `/32`), and `enable_vnc = true` for remote desktop.
+2. Set `enable_aws`, `aws_region`, `key_name`, and `ssh_ingress_cidr` (your `/32`). SSH stays open to that CIDR. VNC is not a security-group port (`enable_vnc` in older tfvars is ignored).
 3. Keep the private key at `~/.ssh/<name>.pem` mode `600` — never in the repo.
 4. Credentials via `~/.aws/credentials` (AWS CLI optional).
 5. Apply / configure / SSH:
@@ -52,13 +52,15 @@ PYTHONPATH=src python3 -m atari_kickoff configure --target aws
 ssh -i ~/.ssh/neo-atari.pem ec2-user@$(cd terraform && terraform output -raw public_ip)
 ```
 
+`configure --target aws` also drops in `/etc/ssh/sshd_config.d/00-atari-keyboard-hardening.conf` and reloads sshd only after `sshd -t` and `sshd -T` both accept it. Effective settings: `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `ChallengeResponseAuthentication no`, `PermitRootLogin no`, `PubkeyAuthentication yes`. Confirm the `.pem` login works before that reload; password login will not.
+
 On the instance, Stella runs as:
 
 `flatpak run io.github.stella_emu.Stella`
 
-### Remote desktop (VNC)
+### Remote desktop (VNC via SSH tunnel)
 
-Terraform must have `enable_vnc = true` (opens **5900–5901/tcp** from `ssh_ingress_cidr`). Ansible (`configure --target aws`) installs TigerVNC + a minimal metacity/xterm session and enables `vncserver@:1`.
+The security group allows SSH only. Ansible (`configure --target aws`) installs TigerVNC, binds it to localhost (`localhost` in `/etc/tigervnc/vncserver-config-mandatory`), and enables `vncserver@:1`. Re-apply Terraform so an existing group drops TCP 5901, then re-run configure so the running server picks up the bind and sshd hardening.
 
 1. Password file on the Mac (create once; never commit):
 
@@ -76,11 +78,16 @@ PYTHONPATH=src python3 -m atari_kickoff apply
 PYTHONPATH=src python3 -m atari_kickoff configure --target aws
 ```
 
-3. Connect from macOS:
+3. Connect from macOS. Leave the SSH session open, then point a VNC client at localhost:
 
-- **Screen Sharing / Finder → Go → Connect to Server:** `vnc://<public_ip>:5901`
-- Or any VNC client to `<public_ip>:5901`
-- Public IP: `cd terraform && terraform output -raw public_ip`
+```bash
+ssh -i ~/.ssh/neo-atari.pem -L 5901:127.0.0.1:5901 ec2-user@HOST
+```
+
+`HOST` is `cd terraform && terraform output -raw public_ip`. The same command is printed by `play --target aws` and by `play --target aws --vnc-tunnel` (that flag only prints the tunnel; it does not sync a ROM).
+
+- **Screen Sharing / Finder → Go → Connect to Server:** `vnc://127.0.0.1:5901`
+- Or any VNC client to `127.0.0.1:5901` while the tunnel is up
 - Password: contents of `~/.config/atari-kickoff/vnc-password.txt`
 
 4. **Remote play from the Mac** (sync ROM + launch Stella on the VNC display):
@@ -212,10 +219,16 @@ for key in ("w", "a", "s", "d", "up", "down", "left", "right", "space"):
 PY
 ```
 
-5. Quick port check from the Mac:
+5. Quick check from the Mac. Public TCP 5901 should fail (nothing in the security group listens for it):
 
 ```bash
-nc -vz "$(cd terraform && terraform output -raw public_ip)" 5901
+nc -vz -G 3 "$(cd terraform && terraform output -raw public_ip)" 5901
+```
+
+With the tunnel left open in another terminal, localhost should succeed:
+
+```bash
+nc -vz 127.0.0.1 5901
 ```
 
 
@@ -223,17 +236,22 @@ nc -vz "$(cd terraform && terraform output -raw public_ip)" 5901
 
 | Command | Purpose |
 |--------|---------|
-| `play [--target local or aws] [--audio or --no-audio] [--dry-run] [rom or name]` | Launch Stella locally, or sync and launch on AWS/VNC. AWS audio is on when the PipeWire sink is up |
-| `configure [--target local|aws]` | Ansible configure |
-| `apply [--dry-run] [--init]` | Terraform plan/apply |
+| `play [--target local or aws] [--audio or --no-audio] [--dry-run] [rom or name]` | Launch Stella locally, or sync and launch on AWS/VNC. AWS audio is on when the PipeWire sink is up. AWS prints the SSH tunnel command |
+| `play --target aws --vnc-tunnel` | Print `ssh -i ~/.ssh/neo-atari.pem -L 5901:127.0.0.1:5901 ec2-user@HOST`, then connect to `vnc://127.0.0.1:5901` |
+| `configure [--target local|aws]` | Ansible configure (aws also hardens sshd and binds TigerVNC to localhost) |
+| `apply [--dry-run] [--init]` | Terraform plan/apply (SSH from `ssh_ingress_cidr` only; no public VNC) |
 | `up` | Placeholder for a one-shot local bootstrap |
+
+### Connect cheat sheet
+
+```bash
+ssh -i ~/.ssh/neo-atari.pem -L 5901:127.0.0.1:5901 ec2-user@HOST
+```
+
+Then `vnc://127.0.0.1:5901`. `play --target aws` prints that tunnel command with `HOST` filled in from Terraform.
 
 ## Costs / teardown notes
 
 - Default AWS shape: `t3.small` + 8 GB gp3 in your chosen region. Stop or destroy when idle.
 - Tear down cloud resources: `cd terraform && terraform destroy` (or flip `enable_aws=false` and apply carefully).
 - Local Stella/ROMs are unaffected by destroy.
-
-## Next up
-
-1. Harden SSH further if the host stays up long-term (optional: prefer SSH tunnel + `localhost` VNC).

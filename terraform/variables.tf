@@ -29,13 +29,13 @@ variable "key_name" {
 }
 
 variable "ssh_ingress_cidr" {
-  description = "CIDR allowed to SSH (and optional VNC) to the Stella host."
+  description = "CIDR allowed to SSH to the Stella host. VNC is not exposed; tunnel it over this SSH session."
   type        = string
   default     = "0.0.0.0/0"
 }
 
 variable "enable_vnc" {
-  description = "Open VNC ports on the security group for remote desktop streaming."
+  description = "Ignored. Kept so existing terraform.tfvars still apply. TigerVNC listens on 127.0.0.1:5901 and this setting does not add security-group ingress. Connect with ssh -L 5901:127.0.0.1:5901, then vnc://127.0.0.1:5901."
   type        = bool
   default     = false
 }

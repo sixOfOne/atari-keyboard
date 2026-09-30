@@ -355,8 +355,8 @@ def local_pcm_player_command() -> list[str] | None:
             "s16le",
             "-ar",
             REMOTE_AUDIO_RATE,
-            "-ac",
-            REMOTE_AUDIO_CHANNELS,
+            "-ch_layout",
+            "stereo",
             "-i",
             "pipe:0",
         ]

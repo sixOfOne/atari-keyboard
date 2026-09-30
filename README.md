@@ -156,7 +156,7 @@ On the Mac, install a player once (`brew install ffmpeg`) and listen:
 ```bash
 ssh -i ~/.ssh/neo-atari.pem ec2-user@<public_ip> /usr/local/bin/stella-audio-capture \
   | ffplay -nodisp -loglevel error -fflags nobuffer -flags low_delay \
-      -probesize 32 -analyzeduration 0 -f s16le -ar 48000 -ac 2 -i pipe:0
+      -probesize 32 -analyzeduration 0 -f s16le -ar 48000 -ch_layout stereo -i pipe:0
 ```
 
 You should hear the tone. Stop `ffplay`, then launch the game:

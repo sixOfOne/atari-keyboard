@@ -397,7 +397,15 @@ def test_audio_player_and_flags() -> None:
         player = cli.local_pcm_player_command()
     finally:
         cli.shutil.which = original_which
-    if not player or player[0] != "ffplay" or "s16le" not in player or "48000" not in player:
+    if (
+        not player
+        or player[0] != "ffplay"
+        or "s16le" not in player
+        or "48000" not in player
+        or "-ch_layout" not in player
+        or "stereo" not in player
+        or "-ac" in player
+    ):
         fail(f"ffplay command unexpected: {player}")
 
     cli.shutil.which = which_sox

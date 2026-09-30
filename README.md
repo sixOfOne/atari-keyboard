@@ -7,7 +7,7 @@ Keyboard-controlled Atari 2600 play via [Stella](https://stella-emu.github.io/),
 - **Local (macOS):** Stella app + PATH symlink, WASD/arrows/fire keymap, Pac-Man ROM (gitignored), smoke test, `play` / `configure` / `apply` CLI.
 - **AWS (us-east-2):** EC2 `t3.small`, 8 GB gp3 root, SSH locked to your IP, Ansible inventory from Terraform outputs, Flatpak Stella (`io.github.stella_emu.Stella`) with the same WASD/arrows/fire map as local.
 - **AWS VNC:** TigerVNC on display `:1` (TCP **5901**), minimal metacity + xterm session; password only in `~/.config/atari-kickoff/vnc-password.txt` (mode 600, never committed).
-- **Remote play:** `play --target aws` syncs a ROM over SCP to `~/roms/` on EC2 and launches Flatpak Stella on `DISPLAY=:1` with software video and audio disabled so the window stays up under TigerVNC (non-blocking by default).
+- **Remote play:** `play --target aws` syncs a ROM over SCP to `~/roms/` on EC2 and launches Flatpak Stella on `DISPLAY=:1` with software video. Audio uses a PipeWire pulse sink when that server is up, and stays silent (dummy SDL driver) when it is not, so a missing sound device cannot crash Stella. TigerVNC carries the picture only; the CLI plays the sink back on this machine over SSH.
 
 ## Layout
 
@@ -95,29 +95,90 @@ PYTHONPATH=src python3 -m atari_kickoff play --target aws
 PYTHONPATH=src python3 -m atari_kickoff play Pac-Man --target aws
 ```
 
-SSH identity defaults to `~/.ssh/neo-atari.pem` (`--ssh-key` to override). Host comes from `terraform output` (`public_ip` / `ssh_host`), not a hardcoded IP. Use `--foreground` to keep the SSH session attached to Stella.
+SSH identity defaults to `~/.ssh/neo-atari.pem` (`--ssh-key` to override). Host comes from `terraform output` (`public_ip` / `ssh_host`), not a hardcoded IP. Use `--foreground` to keep the SSH session attached to Stella. `--no-audio` forces the silent driver. `--audio` asks for sound explicitly; the default is already on when the sink is up.
 
-Or launch manually inside the VNC xterm (same flags `play --target aws` uses):
+Re-run `configure --target aws` after pulling this audio change so the host gets PipeWire and the updated `stella-flatpak`.
+
+Or launch manually inside the VNC xterm:
 
 ```bash
 stella-flatpak ~/roms/"Pac-Man (NA).a26"
 ```
 
-`stella-flatpak` is installed by `configure --target aws`. It runs Flatpak Stella with software video and the dummy SDL audio driver. Under TigerVNC the default OpenGL path and SDL audio device abort Stella (`std::out_of_range` after SDL audio warnings). The wrapper injects `SDL_AUDIODRIVER`, `SDL_VIDEODRIVER`, and `LIBGL_ALWAYS_SOFTWARE` with `flatpak run --env` so the sandbox receives them.
+That starts the game window only. Hearing it still needs the capture pipeline below (or `play --target aws` from the Mac).
 
-Equivalent command:
+### Remote audio
+
+TigerVNC carries the picture and the keyboard. It does not carry sound. `configure --target aws` installs PipeWire on Amazon Linux 2023 and starts it as a user service next to the VNC session:
+
+- `pipewire`, `pipewire-pulseaudio`, `wireplumber`, `pipewire-utils`, `pulseaudio-utils`
+- not the `pulseaudio` daemon package, which conflicts with `pipewire-pulseaudio`
+
+`pipewire-pulse` listens on the user socket `$XDG_RUNTIME_DIR/pulse/native` (the socket Flatpak’s `--socket=pulseaudio` expects). EC2 has no sound card, so `stella-audio-setup` loads a null sink named `stella`, makes it the default, and the Mac records `stella.monitor`. The PulseAudio server stays on that unix socket. It is not published on the network.
+
+`stella-flatpak` always keeps software video (`-video software`, `SDL_VIDEODRIVER=x11`, `LIBGL_ALWAYS_SOFTWARE=1`). The default OpenGL path still aborts Stella under TigerVNC. SDL audio used to abort as well (`std::out_of_range` after SDL audio warnings) when no device existed. The wrapper therefore enables `SDL_AUDIODRIVER=pulseaudio` and `-audio.enabled 1` only after both of these are true:
+
+1. `stella-audio-setup` created the `stella` sink.
+2. A Flatpak probe can see the PulseAudio socket inside the sandbox.
+
+Otherwise it launches with `SDL_AUDIODRIVER=dummy` and `-audio.enabled 0`. `ATARI_AUDIO=auto` (what `play` exports by default) and `ATARI_AUDIO=on` (`--audio`) use that probe. `ATARI_AUDIO=off` (`--no-audio`) skips it. The chosen driver is written to `/tmp/atari-kickoff-audio-mode`.
+
+`play --target aws` then SSHs `stella-audio-capture` (raw s16le, 48 kHz, stereo) into `ffplay`, `mpv`, or `sox` on the machine you ran `play` from. The player is detached; its log is `~/.cache/atari-kickoff/vnc-audio.log`. Screen Sharing’s volume control does not affect this stream.
+
+#### Verify
+
+On the instance, after `configure --target aws`:
 
 ```bash
-DISPLAY=:1 XAUTHORITY=$HOME/.Xauthority \
-SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11 LIBGL_ALWAYS_SOFTWARE=1 \
-flatpak run \
-  --env=SDL_AUDIODRIVER=dummy \
-  --env=SDL_VIDEODRIVER=x11 \
-  --env=LIBGL_ALWAYS_SOFTWARE=1 \
-  io.github.stella_emu.Stella \
-  -video software -audio.enabled 0 \
-  ~/roms/"Pac-Man (NA).a26"
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+systemctl --user --no-pager --full status pipewire pipewire-pulse wireplumber stella-audio
+test -S "$XDG_RUNTIME_DIR/pulse/native" && echo pulse-socket-ok
+pactl info
+pactl get-default-sink
+pactl list short sources | grep stella.monitor
 ```
+
+`pactl info` should name PipeWire, and the default sink should be `stella`. Two seconds of a 440 Hz tone:
+
+```bash
+python3 - <<'PY' | paplay --device=stella --format=s16le --rate=48000 --channels=1 --raw -
+import math, struct, sys
+rate = 48000
+for i in range(rate * 2):
+    sample = int(12000 * math.sin(2 * math.pi * 440 * i / rate))
+    sys.stdout.buffer.write(struct.pack("<h", sample))
+PY
+```
+
+On the Mac, install a player once (`brew install ffmpeg`) and listen:
+
+```bash
+ssh -i ~/.ssh/neo-atari.pem ec2-user@<public_ip> /usr/local/bin/stella-audio-capture \
+  | ffplay -nodisp -loglevel error -fflags nobuffer -flags low_delay \
+      -probesize 32 -analyzeduration 0 -f s16le -ar 48000 -ac 2 -i pipe:0
+```
+
+You should hear the tone. Stop `ffplay`, then launch the game:
+
+```bash
+PYTHONPATH=src python3 -m atari_kickoff play Pac-Man --target aws
+```
+
+The VNC window is the picture. The local player is the sound. A dry run prints the same pipeline without connecting:
+
+```bash
+PYTHONPATH=src python3 -m atari_kickoff play Pac-Man --target aws --dry-run
+```
+
+#### Troubleshooting
+
+- **The game is silent and `/tmp/atari-kickoff-audio-mode` says `dummy`.** Re-run `configure --target aws`. On the host, `pactl info` should succeed. Stella’s own log is `/tmp/atari-kickoff-stella.log`.
+- **`std::out_of_range` or SDL audio warnings in that log.** The probe should have stayed on the dummy driver. Force it with `--no-audio` and keep playing. Software video stays on either way.
+- **`pactl` looks fine but the Mac is quiet.** Screen Sharing will not play this audio. Install `ffmpeg`, `mpv`, or `sox` locally and re-run `play`. `~/.cache/atari-kickoff/vnc-audio.log` has the player and SSH errors.
+- **`stella-audio` failed at configure time.** On the instance: `journalctl --user -u pipewire-pulse -u wireplumber -u stella-audio --no-pager -n 100`. Lingering is `/var/lib/systemd/linger/ec2-user`; the user bus is `/run/user/$(id -u)/bus`.
+- **Flatpak cannot open the socket (SELinux).** `sudo ausearch -m avc -ts recent`. A failed sandbox probe leaves Stella silent instead of crashing.
+- **Crackling or a short delay.** EC2 is a VM, so PipeWire already uses a larger quantum there. The SSH stream adds a bit more delay. That delay is separate from the VNC picture.
 
 ### Flatpak keymap (WASD / arrows / fire)
 
@@ -163,7 +224,7 @@ nc -vz "$(cd terraform && terraform output -raw public_ip)" 5901
 
 | Command | Purpose |
 |--------|---------|
-| `play [--target local|aws] [--dry-run] [rom|name]` | Launch Stella locally or sync+launch on AWS/VNC |
+| `play [--target local or aws] [--audio or --no-audio] [--dry-run] [rom or name]` | Launch Stella locally, or sync and launch on AWS/VNC. AWS audio is on when the PipeWire sink is up |
 | `configure [--target local|aws]` | Ansible configure |
 | `apply [--dry-run] [--init]` | Terraform plan/apply |
 | `up` | Placeholder for a one-shot local bootstrap |

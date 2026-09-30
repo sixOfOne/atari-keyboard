@@ -7,5 +7,9 @@ vnc_display: ":1"
 vnc_port: 5901
 vnc_geometry: "1280x720"
 vnc_session_name: metacity-stella
+# PipeWire pulse null sink. The pulseaudio daemon package conflicts with
+# pipewire-pulseaudio and is not installed. TigerVNC does not carry audio;
+# play --target aws records this sink over SSH.
+stella_audio_sink: stella
 # Password lives only on the Ansible controller (Mac), never in the repo.
 vnc_password_file: "{{ lookup('env', 'HOME') }}/.config/atari-kickoff/vnc-password.txt"

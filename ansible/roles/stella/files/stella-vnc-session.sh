@@ -4,10 +4,19 @@ set -euo pipefail
 unset SESSION_MANAGER
 export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"
 
-if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
-  if command -v dbus-launch >/dev/null 2>&1; then
-    eval "$(dbus-launch --sh-syntax)"
-  fi
+uid=$(id -u)
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/${uid}}"
+# Prefer the systemd user bus so PipeWire (a user service) is the same
+# server SSH launches talk to. dbus-launch would start a private bus.
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+elif [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-launch >/dev/null 2>&1; then
+  eval "$(dbus-launch --sh-syntax)"
+fi
+
+if [ -x /usr/local/bin/stella-audio-setup ]; then
+  /usr/local/bin/stella-audio-setup \
+    || echo "stella-vnc-session: audio sink not ready (Stella will stay silent)" >&2
 fi
 
 if command -v xrdb >/dev/null 2>&1 && [ -r "$HOME/.Xresources" ]; then

@@ -263,6 +263,22 @@
   when: ansible_os_family == "RedHat"
   tags: [stella, vnc]
 
+# pipewire-pulseaudio provides pulseaudio-daemon and conflicts with the
+# pulseaudio package. Do not install the pulseaudio daemon here.
+- name: Install PipeWire audio stack for VNC (Linux)
+  ansible.builtin.dnf:
+    name:
+      - pipewire
+      - pipewire-pulseaudio
+      - pipewire-utils
+      - wireplumber
+      - pulseaudio-utils
+    state: present
+    install_weak_deps: false
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc, audio]
+
 - name: Install Stella VNC session launcher
   ansible.builtin.copy:
     src: stella-vnc-session.sh
@@ -283,7 +299,40 @@
     group: root
   become: true
   when: ansible_os_family == "RedHat"
-  tags: [stella, vnc]
+  tags: [stella, vnc, audio]
+
+- name: Install Stella PipeWire sink setup script (Linux)
+  ansible.builtin.copy:
+    src: stella-audio-setup
+    dest: /usr/local/bin/stella-audio-setup
+    mode: "0755"
+    owner: root
+    group: root
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc, audio]
+
+- name: Install Stella audio capture script (Linux)
+  ansible.builtin.copy:
+    src: stella-audio-capture
+    dest: /usr/local/bin/stella-audio-capture
+    mode: "0755"
+    owner: root
+    group: root
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc, audio]
+
+- name: Install Stella audio user service (Linux)
+  ansible.builtin.copy:
+    src: stella-audio.service
+    dest: /usr/lib/systemd/user/stella-audio.service
+    mode: "0644"
+    owner: root
+    group: root
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc, audio]
 
 - name: Install Stella VNC xsession desktop entry
   ansible.builtin.copy:
@@ -385,6 +434,91 @@
   when: ansible_os_family == "RedHat"
   tags: [stella, vnc]
 
+- name: Enable lingering so PipeWire runs without an SSH login
+  ansible.builtin.command:
+    cmd: loginctl enable-linger {{ ansible_user_id }}
+    creates: "/var/lib/systemd/linger/{{ ansible_user_id }}"
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc, audio]
+
+- name: Ensure the user systemd manager is running
+  ansible.builtin.systemd:
+    name: "user@{{ ansible_user_uid }}.service"
+    state: started
+  become: true
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc, audio]
+
+- name: Enable and start PipeWire and the Stella sink
+  ansible.builtin.shell: |
+    set -euo pipefail
+    uid=$(id -u)
+    export XDG_RUNTIME_DIR="/run/user/${uid}"
+    for _ in $(seq 1 25); do
+      if [[ -S "${XDG_RUNTIME_DIR}/bus" ]]; then
+        break
+      fi
+      sleep 0.2
+    done
+    if [[ ! -S "${XDG_RUNTIME_DIR}/bus" ]]; then
+      echo "user bus missing at ${XDG_RUNTIME_DIR}/bus" >&2
+      exit 1
+    fi
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+    systemctl --user daemon-reload
+    enable_out=$(systemctl --user enable \
+      pipewire.socket \
+      pipewire.service \
+      pipewire-pulse.socket \
+      pipewire-pulse.service \
+      wireplumber.service \
+      stella-audio.service 2>&1 || true)
+    systemctl --user start \
+      pipewire.socket \
+      pipewire.service \
+      pipewire-pulse.socket \
+      pipewire-pulse.service \
+      wireplumber.service \
+      stella-audio.service
+    printf '%s\n' "${enable_out}"
+    systemctl --user --no-pager --full is-active \
+      pipewire.service \
+      pipewire-pulse.service \
+      wireplumber.service \
+      stella-audio.service
+  args:
+    executable: /bin/bash
+  register: stella_audio_units
+  changed_when: "'Created symlink' in (stella_audio_units.stdout | default(''))"
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc, audio]
+
+- name: Confirm the Stella PulseAudio sink
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+    pactl info
+    echo "DEFAULT_SINK=$(pactl get-default-sink)"
+  args:
+    executable: /bin/bash
+  register: stella_pactl
+  changed_when: false
+  failed_when: >-
+    'PipeWire' not in (stella_pactl.stdout | default(''))
+    or ('DEFAULT_SINK=' ~ stella_audio_sink) not in (stella_pactl.stdout | default(''))
+  when: ansible_os_family == "RedHat"
+  tags: [stella, vnc, audio]
+
+- name: Show PipeWire sink status
+  ansible.builtin.debug:
+    var: stella_pactl.stdout_lines
+  when:
+    - ansible_os_family == "RedHat"
+    - stella_pactl is defined
+  tags: [stella, vnc, audio]
+
 - name: Enable and start TigerVNC on display {{ vnc_display }}
   ansible.builtin.systemd:
     name: "vncserver@{{ vnc_display }}.service"
@@ -401,7 +535,8 @@
       VNC listening on {{ ansible_host | default(inventory_hostname) }}:{{ vnc_port }}
       (display {{ vnc_display }}). Password file on controller:
       {{ vnc_password_file }}. Inside the session, launch Stella with
-      stella-flatpak (software video, audio disabled). Keymap DB:
+      stella-flatpak (software video; PipeWire pulse sink {{ stella_audio_sink }}
+      when the sound server is up, otherwise silent). Keymap DB:
       ~/.var/app/{{ stella_flatpak_id }}/config/stella/stella.sqlite3
   when: ansible_os_family == "RedHat"
   tags: [stella, vnc]

@@ -1,27 +1,71 @@
 #!/bin/bash
 # Launch Flatpak Stella on the TigerVNC display.
 #
-# OpenGL and the default SDL audio driver abort Stella on Amazon Linux
-# (std::out_of_range after SDL audio warnings). Software video and the dummy
-# audio driver keep the game window up.
+# OpenGL still aborts Stella under TigerVNC, so video stays on the software
+# renderer (LIBGL_ALWAYS_SOFTWARE=1 and -video software).
 #
-# Flatpak does not pass arbitrary host environment variables into the sandbox,
-# so SDL_* and LIBGL_ALWAYS_SOFTWARE are injected with flatpak run --env.
-# Keep these flags aligned with REMOTE_SDL_ENV / REMOTE_STELLA_ARGS in
-# src/atari_kickoff/cli.py.
+# SDL audio used to abort the same way (std::out_of_range after SDL audio
+# warnings) when no sound server existed. PulseAudio is enabled only after
+# stella-audio-setup has created the "stella" sink and the Flatpak sandbox
+# can see that socket. Otherwise SDL_AUDIODRIVER=dummy and -audio.enabled 0
+# keep the window up.
+#
+# ATARI_AUDIO=auto (default) or on: try pulse, fall back to silent.
+# ATARI_AUDIO=off: stay silent (`play --no-audio`).
+#
+# Flatpak does not pass arbitrary host variables into the sandbox, so SDL_*
+# and LIBGL_ALWAYS_SOFTWARE are injected with flatpak run --env.
+# The final driver name is written to /tmp/atari-kickoff-audio-mode.
 set -euo pipefail
 
+APP_ID=io.github.stella_emu.Stella
+MODE_FILE="${ATARI_AUDIO_MODE_FILE:-/tmp/atari-kickoff-audio-mode}"
+SETUP="${STELLA_AUDIO_SETUP:-/usr/local/bin/stella-audio-setup}"
+
+uid=$(id -u)
 export DISPLAY="${DISPLAY:-:1}"
 export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
-export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
-export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
-export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/${uid}}"
+if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "${XDG_RUNTIME_DIR}/bus" ]]; then
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+fi
+
+case "${ATARI_AUDIO:-auto}" in
+  on|off|auto) audio_mode="${ATARI_AUDIO:-auto}" ;;
+  *) audio_mode=auto ;;
+esac
+
+driver=dummy
+audio_enabled=0
+if [[ "${audio_mode}" != off ]] \
+  && [[ -x "${SETUP}" ]] \
+  && "${SETUP}"
+then
+  if flatpak run --command=sh --socket=pulseaudio "${APP_ID}" -c \
+    'if [ -n "${PULSE_SERVER:-}" ] || [ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/pulse/native" ]; then exit 0; fi; exit 1'
+  then
+    driver=pulseaudio
+    audio_enabled=1
+  else
+    echo "stella-flatpak: PulseAudio socket is not visible inside the sandbox; launching silent" >&2
+  fi
+elif [[ "${audio_mode}" != off ]]; then
+  echo "stella-flatpak: PipeWire sink is not ready; launching silent" >&2
+fi
+
+printf '%s\n' "${driver}" >"${MODE_FILE}"
+echo "stella-flatpak: SDL_AUDIODRIVER=${driver} -audio.enabled ${audio_enabled}" >&2
+
+export SDL_AUDIODRIVER="${driver}"
+export SDL_VIDEODRIVER=x11
+export LIBGL_ALWAYS_SOFTWARE=1
 
 exec flatpak run \
+  --socket=pulseaudio \
   --env="SDL_AUDIODRIVER=${SDL_AUDIODRIVER}" \
   --env="SDL_VIDEODRIVER=${SDL_VIDEODRIVER}" \
   --env="LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE}" \
-  io.github.stella_emu.Stella \
+  "${APP_ID}" \
   -video software \
-  -audio.enabled 0 \
+  -audio.enabled "${audio_enabled}" \
   "$@"

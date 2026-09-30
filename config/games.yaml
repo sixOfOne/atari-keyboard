@@ -1,0 +1,7 @@
+# ROM paths are local-only and must not be committed.
+# Add legally obtained ROM paths when running locally, for example:
+# games:
+#   - name: Example Game
+#     rom: roms/example.bin
+
+games: []

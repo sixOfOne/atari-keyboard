@@ -1,0 +1,17 @@
+# Host keyboard -> Atari joystick intent.
+# Stella's keyboard labels and per-game bindings may differ; adjust in Stella as needed.
+keyboard:
+  w: up
+  arrowup: up
+  s: down
+  arrowdown: down
+  a: left
+  arrowleft: left
+  d: right
+  arrowright: right
+  space: fire
+  ctrl: fire
+
+notes:
+  - This is an intent map for the kickoff CLI, not a direct Stella controller file.
+  - Verify and adjust the final mapping in Stella for the selected game and host.

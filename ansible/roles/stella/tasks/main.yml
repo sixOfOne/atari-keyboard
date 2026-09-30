@@ -1,0 +1,25 @@
+---
+# Stub only: choose the correct package name for the target OS before enabling.
+- name: Placeholder for installing Stella
+  ansible.builtin.debug:
+    msg: "Would install the Stella package on the local host"
+  tags: [stella, install]
+
+# Example future task (intentionally disabled until the target platform is chosen):
+# - name: Install Stella package
+#   ansible.builtin.package:
+#     name: stella
+#     state: present
+#   become: true
+
+- name: Placeholder for copying the keyboard map
+  ansible.builtin.debug:
+    msg: "Would copy config/keymap.yaml to the configured Stella host"
+  tags: [stella, keymap]
+
+# Example future task:
+# - name: Copy keymap configuration
+#   ansible.builtin.copy:
+#     src: "{{ playbook_dir }}/../config/keymap.yaml"
+#     dest: "{{ ansible_env.HOME }}/.config/atari-kickoff/keymap.yaml"
+#     mode: "0644"

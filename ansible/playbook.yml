@@ -1,0 +1,9 @@
+---
+# Localhost stub for the future Stella configuration path.
+# Run with: ansible-playbook -i inventory/localhost.yml playbook.yml
+- name: Prepare local Atari smoke path
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - role: stella

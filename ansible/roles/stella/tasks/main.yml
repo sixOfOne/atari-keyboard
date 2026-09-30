@@ -365,7 +365,7 @@
   when: ansible_os_family == "RedHat"
   tags: [stella, vnc]
 
-- name: Set TigerVNC defaults (listen on LAN; SG restricts source IP)
+- name: Set TigerVNC defaults (session and geometry)
   ansible.builtin.copy:
     dest: /etc/tigervnc/vncserver-config-defaults
     mode: "0644"
@@ -375,8 +375,44 @@
       geometry={{ vnc_geometry }}
       securitytypes=vncauth
       alwaysshared
+      localhost
   become: true
   when: ansible_os_family == "RedHat"
+  notify: Restart TigerVNC
+  tags: [stella, vnc]
+
+- name: Force TigerVNC to listen on localhost only
+  ansible.builtin.copy:
+    dest: /etc/tigervnc/vncserver-config-mandatory
+    mode: "0644"
+    content: |
+      # Managed by atari-keyboard ansible stella role.
+      # Mandatory wins over ~/.config/tigervnc/config and ~/.vnc/config.
+      # Reach the desktop with:
+      #   ssh -L 5901:127.0.0.1:5901 ec2-user@HOST
+      #   vnc://127.0.0.1:5901
+      localhost
+  become: true
+  when: ansible_os_family == "RedHat"
+  notify: Restart TigerVNC
+  tags: [stella, vnc]
+
+- name: Restore SELinux context on TigerVNC config
+  ansible.builtin.command:
+    cmd: >-
+      restorecon -v
+      /etc/tigervnc/vncserver-config-defaults
+      /etc/tigervnc/vncserver-config-mandatory
+  register: vnc_cfg_restorecon
+  changed_when: >-
+    'Relabeled' in (
+      (vnc_cfg_restorecon.stdout | default(''))
+      ~ (vnc_cfg_restorecon.stderr | default(''))
+    )
+  failed_when: false
+  become: true
+  when: ansible_os_family == "RedHat"
+  notify: Restart TigerVNC
   tags: [stella, vnc]
 
 - name: Require password file on Ansible controller
@@ -532,10 +568,14 @@
 - name: Report VNC endpoint
   ansible.builtin.debug:
     msg: >-
-      VNC listening on {{ ansible_host | default(inventory_hostname) }}:{{ vnc_port }}
-      (display {{ vnc_display }}). Password file on controller:
-      {{ vnc_password_file }}. Inside the session, launch Stella with
-      stella-flatpak (software video; PipeWire pulse sink {{ stella_audio_sink }}
+      TigerVNC display {{ vnc_display }} listens on 127.0.0.1:{{ vnc_port }}
+      only. Tunnel from your machine, then connect to vnc://127.0.0.1:{{ vnc_port }}:
+      ssh -i {{ ansible_ssh_private_key_file | default('~/.ssh/neo-atari.pem') }}
+      -L {{ vnc_port }}:127.0.0.1:{{ vnc_port }}
+      {{ ansible_user }}@{{ ansible_host | default(inventory_hostname) }}.
+      Password file on controller: {{ vnc_password_file }}.
+      Inside the session, launch Stella with stella-flatpak
+      (software video; PipeWire pulse sink {{ stella_audio_sink }}
       when the sound server is up, otherwise silent). Keymap DB:
       ~/.var/app/{{ stella_flatpak_id }}/config/stella/stella.sqlite3
   when: ansible_os_family == "RedHat"

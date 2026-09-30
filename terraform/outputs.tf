@@ -17,3 +17,8 @@ output "ssh_host" {
   description = "Convenience SSH target when AWS is enabled"
   value       = try(aws_instance.stella[0].public_ip, null)
 }
+
+output "vnc_url" {
+  description = "VNC client URL. Open this only after ssh -L 5901:127.0.0.1:5901 to the instance. The security group does not allow TCP 5901. enable_vnc does not change that."
+  value       = var.enable_aws ? "vnc://127.0.0.1:5901" : null
+}

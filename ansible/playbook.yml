@@ -12,4 +12,7 @@
     stella_bin: /Applications/Stella.app/Contents/MacOS/stella
     local_bin: "{{ ansible_env.HOME }}/.local/bin"
   roles:
+    # Amazon Linux only. macOS local configure does not touch sshd.
+    - role: sshd
+      when: ansible_os_family == "RedHat"
     - role: stella

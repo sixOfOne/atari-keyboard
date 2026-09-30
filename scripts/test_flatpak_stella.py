@@ -571,6 +571,87 @@ def test_audio_scripts_and_ansible() -> None:
     print("PASS: audio scripts and ansible")
 
 
+def test_vnc_tunnel_and_ssh_hardening() -> None:
+    import contextlib
+    import io
+    from pathlib import Path
+
+    import atari_kickoff.cli as cli
+
+    argv = cli.vnc_tunnel_argv("203.0.113.5", Path("/home/me/.ssh/neo-atari.pem"))
+    rendered = cli._fmt_cmd(argv)
+    expected = (
+        "ssh -i /home/me/.ssh/neo-atari.pem "
+        "-L 5901:127.0.0.1:5901 ec2-user@203.0.113.5"
+    )
+    if rendered != expected:
+        fail(f"tunnel command {rendered!r} != {expected!r}")
+    if "203.0.113.5:5901" in rendered:
+        fail(f"tunnel must not target the public VNC port: {rendered}")
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        cli.print_vnc_tunnel("203.0.113.5", Path("/home/me/.ssh/neo-atari.pem"))
+    printed = buf.getvalue()
+    if "vnc://127.0.0.1:5901" not in printed:
+        fail(f"tunnel help missing local URL: {printed!r}")
+    if "vnc://203.0.113.5" in printed:
+        fail(f"tunnel help still advertises a public VNC URL: {printed!r}")
+
+    flagged = cli.build_parser().parse_args(["play", "--target", "aws", "--vnc-tunnel"])
+    if not flagged.vnc_tunnel or flagged.target != "aws":
+        fail(f"--vnc-tunnel did not parse: {flagged}")
+    plain = cli.build_parser().parse_args(["play", "--dry-run"])
+    if plain.vnc_tunnel:
+        fail("--vnc-tunnel should default off")
+
+    main_tf = (ROOT / "terraform" / "main.tf").read_text(encoding="utf-8")
+    if "5901" in main_tf.split("ingress", 1)[-1] and "from_port" in main_tf:
+        # Comments may mention 5901. Ingress blocks must not.
+        ingress = main_tf.split("ingress", 1)[-1]
+        for port in ("5900", "5901"):
+            if f"to_port     = {port}" in ingress or f"from_port   = {port}" in ingress:
+                fail(f"security group still opens {port}")
+    if "var.ssh_ingress_cidr" not in main_tf or "to_port     = 22" not in main_tf:
+        fail("SSH ingress from ssh_ingress_cidr is missing")
+
+    tasks = (ROOT / "ansible" / "roles" / "stella" / "tasks" / "main.yml").read_text(
+        encoding="utf-8"
+    )
+    if "vncserver-config-mandatory" not in tasks or "\n      localhost\n" not in tasks:
+        fail("TigerVNC is not forced onto localhost")
+    if "Restart TigerVNC" not in tasks:
+        fail("TigerVNC config changes must restart the server")
+
+    sshd = (ROOT / "ansible" / "roles" / "sshd" / "tasks" / "main.yml").read_text(
+        encoding="utf-8"
+    )
+    for token in (
+        "PasswordAuthentication no",
+        "KbdInteractiveAuthentication no",
+        "ChallengeResponseAuthentication no",
+        "PermitRootLogin no",
+        "PubkeyAuthentication yes",
+        "00-atari-keyboard-hardening.conf",
+        "/usr/sbin/sshd -T",
+        "Reload sshd",
+    ):
+        if token not in sshd:
+            fail(f"sshd role missing {token!r}")
+    playbook = (ROOT / "ansible" / "playbook.yml").read_text(encoding="utf-8")
+    if "role: sshd" not in playbook:
+        fail("playbook does not apply the sshd role")
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    if "ssh -i ~/.ssh/neo-atari.pem -L 5901:127.0.0.1:5901 ec2-user@HOST" not in readme:
+        fail("README is missing the SSH tunnel command")
+    if "vnc://127.0.0.1:5901" not in readme:
+        fail("README is missing the localhost VNC URL")
+    if "vnc://<public_ip>:5901" in readme or "vnc://{host}:5901" in readme:
+        fail("README still documents a public VNC endpoint")
+    print("PASS: vnc tunnel and ssh hardening")
+
+
 def main() -> int:
     import tempfile
 
@@ -584,6 +665,7 @@ def main() -> int:
     test_launch_command()
     test_audio_player_and_flags()
     test_audio_scripts_and_ansible()
+    test_vnc_tunnel_and_ssh_hardening()
     print("PASS: flatpak stella checks")
     return 0
 

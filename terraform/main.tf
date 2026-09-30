@@ -50,25 +50,17 @@ data "aws_ami" "amazon_linux" {
 resource "aws_security_group" "stella" {
   count       = var.enable_aws ? 1 : 0
   name        = "${var.name_prefix}-stella"
-  description = "SSH (and optional VNC) for remote Stella host"
+  description = "SSH from ssh_ingress_cidr. VNC is localhost-only via an SSH tunnel."
 
+  # TCP 5900/5901 are intentionally absent. TigerVNC listens on 127.0.0.1:5901.
+  # Reach it with: ssh -L 5901:127.0.0.1:5901 ec2-user@HOST
+  # then: vnc://127.0.0.1:5901
   ingress {
     description = "SSH"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
     cidr_blocks = [var.ssh_ingress_cidr]
-  }
-
-  dynamic "ingress" {
-    for_each = var.enable_vnc ? [1] : []
-    content {
-      description = "VNC"
-      from_port   = 5900
-      to_port     = 5901
-      protocol    = "tcp"
-      cidr_blocks = [var.ssh_ingress_cidr]
-    }
   }
 
   egress {
@@ -81,6 +73,14 @@ resource "aws_security_group" "stella" {
   tags = {
     Name    = "${var.name_prefix}-stella"
     Project = "atari-keyboard"
+  }
+
+  # enable_vnc remains for existing tfvars. It must not add 5901 ingress.
+  lifecycle {
+    precondition {
+      condition     = var.enable_vnc == true || var.enable_vnc == false
+      error_message = "enable_vnc is ignored and must be a bool. VNC stays on 127.0.0.1 via an SSH tunnel."
+    }
   }
 }
 
